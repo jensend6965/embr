@@ -30,6 +30,17 @@ const ASKED_PING_TIMEOUT: Duration = Duration::from_millis(2500);
 const ASKED_DEVICE_TIMEOUT: Duration = Duration::from_millis(8000);
 /// A receiver that is answering slowly is still answering; this is its stretched cap.
 const ASKED_RECEIVER_TIMEOUT: Duration = Duration::from_millis(1500);
+/// What a *watch* pass gives a device that has not answered, and the reason a watch can run every
+/// few seconds at all.
+///
+/// A device that is there answers a battery question in single-digit milliseconds (measured on
+/// this machine's G733 dongle), so a short deadline costs a live device nothing. A device that is
+/// not there — a headset switched off, whose dongle still answers pings while its battery call
+/// goes nowhere — costs exactly this much and no more. Waiting three or four seconds to be told
+/// "nothing" is what made a sweep of a powered-off headset take fifteen seconds, and why noticing
+/// it by hand took a Rescan and a further wait.
+const WATCH_PING_TIMEOUT: Duration = Duration::from_millis(250);
+const WATCH_DEVICE_TIMEOUT: Duration = Duration::from_millis(700);
 
 /// What kind of peripheral this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,17 +195,21 @@ pub struct DiscoveryReport {
 
 /// How much time a sweep gives a device that has not answered yet.
 ///
-/// The two sweeps want opposite things. A **scheduled** one is background housekeeping: nothing
+/// The three passes want different things. A **scheduled** one is background housekeeping: nothing
 /// is waiting on it, and a device that is asleep is not worth stalling the pass for — so every
-/// wait is short. A sweep the user **asked** for is different: they are looking at the window,
-/// they may have just picked a device up, and a device that is on its way back from sleep
-/// answers within a couple of seconds — so it waits longer before writing it off.
+/// wait is short. A sweep the user **asked** for is different: they are looking at the window, they
+/// may have just picked a device up, and a device that is on its way back from sleep answers within
+/// a couple of seconds — so it waits longer before writing it off. A **watch** is the question "are
+/// you still there", asked every few seconds, and it is deliberately the least patient of the
+/// three: see [`WATCH_DEVICE_TIMEOUT`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Patience {
     /// The sweep the application schedules for itself.
     Scheduled,
     /// The sweep the user asked for, by pressing Rescan or opening the window.
     Asked,
+    /// The cheap pass that asks whether each device is still answering.
+    Watch,
 }
 
 impl Patience {
@@ -203,6 +218,7 @@ impl Patience {
         match self {
             Self::Scheduled => DIRECT_PING_TIMEOUT,
             Self::Asked => ASKED_PING_TIMEOUT,
+            Self::Watch => WATCH_PING_TIMEOUT,
         }
     }
 
@@ -211,6 +227,7 @@ impl Patience {
         match self {
             Self::Scheduled => DEVICE_TIMEOUT,
             Self::Asked => ASKED_DEVICE_TIMEOUT,
+            Self::Watch => WATCH_DEVICE_TIMEOUT,
         }
     }
 
@@ -219,6 +236,9 @@ impl Patience {
         match self {
             Self::Scheduled => RECEIVER_TIMEOUT,
             Self::Asked => ASKED_RECEIVER_TIMEOUT,
+            // A receiver answers about itself, so a watch never needs to be patient with one. The
+            // paired devices behind it are the ones that go quiet, and they are asked directly.
+            Self::Watch => RECEIVER_TIMEOUT,
         }
     }
 }
@@ -321,24 +341,29 @@ pub fn discover_with(patience: Patience) -> DiscoveryReport {
         };
         match Channel::open(&node.hidraw) {
             Ok(mut channel) => {
-                // A short ping first, on ROOT: every HID++ 2.0 device implements it, so this
-                // asks "are you there", not "do you happen to have a voltage feature". Waiting
-                // the full device timeout for something that never answers is what turns a
-                // refresh into a twenty-second stall, and a device that cannot answer in under
-                // a second is asleep, not slow.
-                match feature_index(&mut channel, DEVICE_SELF, Feature::Root, patience.ping()) {
-                    Ok(_) => {
+                // A short ping first, on ROOT: every HID++ 2.0 device implements it, so this asks
+                // "are you there", not "do you happen to have a voltage feature". Waiting the full
+                // device timeout for something that never answers is what turns a refresh into a
+                // stall, and a device that cannot answer in under a second is asleep, not slow.
+                match there(&mut channel, DEVICE_SELF, patience) {
+                    Ok(()) => {
                         device.responded = true;
                         match read_battery(&mut channel, DEVICE_SELF, patience.device()) {
                             Ok(reading) => device.battery = Some(reading),
-                            Err(err) => device.error = Some(err.to_string()),
+                            Err(err) => {
+                                // A timeout is silence, not an answer, and on a node that is a
+                                // dongle the ping was answered by the dongle: the G733's dongle
+                                // answers a ping in 2 ms all day long while the headset behind it
+                                // is switched off. "Connected" was the word that made a
+                                // switched-off headset look like a working one.
+                                device.responded = answered(&err);
+                                device.error = Some(err.to_string());
+                            }
                         }
                     }
                     Err(err) => {
-                        device.error = Some(format!(
-                            "no HID++ answer within {} ms ({err})",
-                            patience.ping().as_millis()
-                        ));
+                        device.responded = answered(&err);
+                        device.error = Some(err.to_string());
                     }
                 }
             }
@@ -348,6 +373,35 @@ pub fn discover_with(patience: Patience) -> DiscoveryReport {
     }
 
     report
+}
+
+/// Whether anything is on the other end of this index.
+///
+/// One question, and it decides whether the rest of the read is worth attempting. A device that has
+/// been switched off answers nothing and *every* call to it costs its whole timeout, so asking it
+/// for a name and then for four battery features spends six timeouts learning the same silence six
+/// times. Measured on this machine — a G733 switched off, a keyboard and a mouse asleep — that was
+/// 20 s for a scheduled sweep and 38 s for a Rescan, all of it waiting.
+///
+/// An answer of any kind counts, including "I do not have that feature": that is a device telling
+/// you it is there. It is the silence that writes a device off.
+fn there(channel: &mut Channel, index: u8, patience: Patience) -> Result<()> {
+    match feature_index(channel, index, Feature::Root, patience.ping()) {
+        Ok(_) => Ok(()),
+        // Unsupported ROOT is still an answer, from a device that is listening.
+        Err(Error::Protocol2 { .. }) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Whether an error still means the device is there.
+///
+/// A timeout is silence; anything else — "I do not have that feature" above all — is an answer
+/// from a device that is listening. This is what keeps a switched-off headset from reading as
+/// *Connected*: its dongle answers pings in 2 ms whatever the headset is doing, so the ping cannot
+/// decide it, and the battery question is what says whether anyone is home.
+fn answered(err: &Error) -> bool {
+    !matches!(err, Error::Timeout { .. })
 }
 
 fn device_from_slot(
@@ -382,6 +436,12 @@ fn device_from_slot(
         && let Some(own) = own_node_for(nodes, slot)
     {
         device.name = own.name.clone();
+    }
+    // Is anyone there? See `there`: a device that has gone keeps this read to one timeout instead
+    // of the six it would otherwise spend rediscovering the same silence.
+    if let Err(err) = there(channel, slot.slot, patience) {
+        device.error = Some(err.to_string());
+        return device;
     }
     if let Some((name, kind)) = device_name(channel, slot.slot, patience.receiver()) {
         // The device answered us by name, so it is there even if its battery call fails.
@@ -639,6 +699,11 @@ mod tests {
         );
         assert!(Patience::Asked.device() > Patience::Scheduled.device());
         assert!(Patience::Asked.receiver() > Patience::Scheduled.receiver());
+        assert!(
+            Patience::Watch.device() < Patience::Scheduled.device()
+                && Patience::Watch.ping() < Patience::Scheduled.ping(),
+            "a watch has to be cheaper than a sweep, or it cannot run every few seconds"
+        );
         // …but not without end: the user is sitting in front of the window waiting for it.
         assert!(
             Patience::Asked.device() <= Duration::from_secs(10),
@@ -702,6 +767,21 @@ mod tests {
         // is in. Calling that "Unavailable" reads as "gone", which it is not.
         device.responded = true;
         assert_eq!(device.status_label(), "Connected");
+    }
+
+    #[test]
+    fn silence_is_not_an_answer() {
+        // The distinction the wording of a device row turns on: a device that says "I do not have
+        // that feature" is there; one that says nothing at all is not, however cheerfully its
+        // dongle answers pings (see `answered`).
+        assert!(!answered(&Error::Timeout {
+            waited: Duration::from_millis(700)
+        }));
+        assert!(answered(&Error::Protocol2 {
+            code: 0x08,
+            name: "unsupported"
+        }));
+        assert!(answered(&Error::Io(std::io::Error::other("EPIPE"))));
     }
 
     #[test]

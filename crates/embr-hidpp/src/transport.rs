@@ -5,10 +5,12 @@
 //! request drains pending notifications first — a stale reply matched to the wrong request
 //! is how a battery monitor ends up showing another device's percentage.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::report::{FeatureCall, FeatureReply, LONG_LEN, RegisterCall};
@@ -19,6 +21,38 @@ use crate::{Error, Result};
 pub const DEVICE_TIMEOUT: Duration = Duration::from_millis(4000);
 /// The receiver itself answers quickly when it answers at all.
 pub const RECEIVER_TIMEOUT: Duration = Duration::from_millis(900);
+/// What the second attempt at the other report size gets (see [`Channel::call_feature`]).
+///
+/// Short on purpose: a device that answers the other size answers it in milliseconds — the G733
+/// headset on this machine replies to a long request in 2 ms and never to a short one — so there
+/// is nothing to wait for. A device that is simply not there would otherwise spend a whole second
+/// timeout proving it again. Measured: this is what made a pass over three quiet devices take
+/// 2.9 s instead of 1.2 s, and a sweep of them 11 s instead of 5 s.
+const OTHER_SIZE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Which report size each device answers, remembered for the life of the process.
+///
+/// The size is a property of the device, not of a channel — [`Channel::call_feature`] says why —
+/// but discovering it costs a timeout, and a channel is opened fresh for every pass over every
+/// device. Without this memory, every sweep of a device that has gone quiet pays twice: once for
+/// the size it does not answer, and once for the size it does. The key is the node and the HID++
+/// index on it, because one receiver node talks to several devices.
+fn preferences() -> &'static Mutex<HashMap<String, bool>> {
+    static PREFERENCES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    PREFERENCES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The size this device last answered at, if it has ever answered.
+fn remembered(key: &str) -> Option<bool> {
+    preferences().lock().ok()?.get(key).copied()
+}
+
+/// Note which size a device answered at.
+fn remember(key: &str, long: bool) {
+    if let Ok(mut preferences) = preferences().lock() {
+        preferences.insert(key.to_string(), long);
+    }
+}
 
 /// An open hidraw node.
 pub struct Channel {
@@ -28,18 +62,22 @@ pub struct Channel {
     /// Whether to address this node with long reports. Set from the first timeout rather than
     /// from a protocol version we would have to ask for, so one channel keeps one answer.
     prefer_long: bool,
+    /// `path`, as the first half of a [`preferences`] key.
+    key: String,
 }
 
 impl Channel {
     /// Open a node read/write. Fails on a node that is not a HID++ interface.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
+        let key = path.display().to_string();
         let file = OpenOptions::new().read(true).write(true).open(&path)?;
         Ok(Self {
             path,
             file,
             software_id: 0x8,
             prefer_long: true,
+            key,
         })
     }
 
@@ -89,15 +127,40 @@ impl Channel {
         // are sending: the reference implementation picks it from the protocol version, and a
         // 2-byte ROOT lookup sent short is simply ignored — the G733 headset on this machine
         // answers long requests in 2 ms and never answers a short one. A device that only
-        // answers short reports costs one timeout to discover, and the answer is remembered.
-        let long = self.prefer_long && params.len() <= LONG_LEN - 4;
+        // answers short reports costs one timeout to discover, and the answer is remembered for
+        // the next pass over it, because a fresh channel per pass would otherwise pay again.
+        let key = format!("{}#{}", self.key, device);
+        let proven = remembered(&key);
+        let prefer_long = proven.unwrap_or(self.prefer_long);
+        let long = prefer_long && params.len() <= LONG_LEN - 4;
         match self.exchange(&call, long, timeout) {
+            Ok(reply) => {
+                self.learn(&key, long);
+                Ok(reply)
+            }
+            Err(Error::Timeout { .. }) if proven == Some(long) => {
+                // This device has answered at this very size before, so the silence is the
+                // device, not the report size: it has stopped answering and asking it the same
+                // question in the other size would only buy a second timeout.
+                Err(Error::Timeout { waited: timeout })
+            }
             Err(Error::Timeout { .. }) if long => {
-                self.prefer_long = false;
-                self.exchange(&call, false, timeout)
+                // The other size gets one cheap attempt and no more: a device that answers it
+                // answers at once (2 ms, measured), and one that is not there should not be
+                // asked twice at full price.
+                let reply = self.exchange(&call, false, timeout.min(OTHER_SIZE_TIMEOUT))?;
+                self.learn(&key, false);
+                Ok(reply)
             }
             other => other,
         }
+    }
+
+    /// Note which size this device answers at: for the rest of this channel, and for the next
+    /// pass over the same node and device index.
+    fn learn(&mut self, key: &str, long: bool) {
+        self.prefer_long = long;
+        remember(key, long);
     }
 
     /// Send one request frame and wait for the reply that belongs to it.
@@ -230,5 +293,46 @@ pub fn poll_readable(fd: i32, timeout: Duration) -> Result<bool> {
             return Err(Error::Io(err));
         }
         return Ok(rc > 0 && pfd.revents & libc::POLLIN != 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_report_size_is_remembered_per_node_and_device() {
+        // One receiver node talks to several devices, and the same index on another node is a
+        // different device: a remembered preference may not leak between them.
+        let one = "/dev/hidraw-remember-test-a#255";
+        let other_node = "/dev/hidraw-remember-test-b#255";
+        let other_device = "/dev/hidraw-remember-test-a#1";
+        assert_eq!(
+            remembered(one),
+            None,
+            "nothing is known before anyone answers"
+        );
+        remember(one, false);
+        assert_eq!(
+            remembered(one),
+            Some(false),
+            "a device that answered short is asked short next time"
+        );
+        assert_eq!(
+            remembered(other_node),
+            None,
+            "another node knows nothing of it"
+        );
+        assert_eq!(
+            remembered(other_device),
+            None,
+            "nor another device on the same node"
+        );
+        remember(one, true);
+        assert_eq!(
+            remembered(one),
+            Some(true),
+            "the latest answer is what counts"
+        );
     }
 }

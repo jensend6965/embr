@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn a_chosen_device_that_has_gone_quiet_keeps_its_icon() {
         let mut quiet = device("Headset", None);
-        quiet.error = Some("no reply after 4s".to_string());
+        quiet.error = Some("no reply".to_string());
         let snapshot = Snapshot::from_report(&report(vec![quiet]), &config());
 
         // One that is attached but saying nothing, and one that is not attached at all: both keep
@@ -405,17 +405,14 @@ mod tests {
         // A device that could not be read at all is exactly the one worth asking again.
         let mut silent = device("Mouse", None);
         silent.responded = false;
-        silent.error = Some("no reply after 4s".to_string());
+        silent.error = Some("no reply".to_string());
         let snapshot = Snapshot::from_report(&report(vec![silent]), &config);
         assert!(snapshot.incomplete());
-        assert_eq!(
-            snapshot.devices[0].error.as_deref(),
-            Some("no reply after 4s")
-        );
+        assert_eq!(snapshot.devices[0].error.as_deref(), Some("no reply"));
 
         // And one bad device among good ones is still an incomplete sweep.
         let mut second_silent = device("Keyboard", Some((90, PercentSource::Device)));
-        second_silent.error = Some("no reply after 4s".to_string());
+        second_silent.error = Some("no reply".to_string());
         let mixed = Snapshot::from_report(
             &report(vec![
                 device("Mouse", Some((80, PercentSource::Device))),

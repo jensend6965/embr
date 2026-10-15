@@ -38,7 +38,13 @@ pub use transport::Channel;
 pub enum Error {
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("no reply after {waited:?}")]
+    /// Nothing came back in the time the caller allowed.
+    ///
+    /// The wait is kept as a field (the log and `inspect` print it with `Debug`) but deliberately
+    /// left out of the message: the same device can be asked with a 4-second patience during a
+    /// sweep and 700 ms during a watch, and a message that quotes whichever deadline happened to
+    /// be in force reads like the application gave up early rather than like the device is gone.
+    #[error("no reply")]
     Timeout { waited: std::time::Duration },
     #[error("HID++ 1.0 error 0x{code:02X} ({name})")]
     Protocol1 { code: u8, name: &'static str },
