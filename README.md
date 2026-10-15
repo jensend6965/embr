@@ -25,7 +25,7 @@ Decision taken 2026-10-15 after measuring the alternatives — see
 | Protocol | **our own**, written from the HID++ documentation and from byte-level measurements: no Solaar code, no hidapi, no udev crate — `libc` is the only dependency |
 | GUI | **Slint 1.18** — chosen on the spike numbers and on the prototypes: 25 ms to window, 21.9 MiB binary, tray/i18n/accessibility built in, least UI code |
 | Tray + notifications | `ksni` (StatusNotifierItem) + `notify-rust`; both verified on this desktop |
-| Licence | MIT OR Apache-2.0 for our code, on the **Slint Royalty-free licence** for the toolkit — which requires the `AboutSlint` widget in an About dialog, implemented in the app. No Solaar-derived data is used, so nothing forces copyleft |
+| Licence | MIT OR Apache-2.0 for our code, on the **Slint Royalty-free licence** for the toolkit — which requires the `AboutSlint` widget in an About dialog, implemented in the app. **Exception to check:** `VOLTAGE_CURVE` in `crates/hidpp/src/battery.rs` is reproduced from Solaar (GPL-2.0-or-later) so that percentages match `solaar show` — the provenance is stated in the code, and replacing those anchors with a curve measured from our own devices would settle it |
 
 ## Architecture
 

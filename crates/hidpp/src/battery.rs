@@ -145,11 +145,16 @@ impl BatteryReading {
 ///
 /// A single lithium-ion cell sits near 4.2 V full and falls off a cliff below ~3.4 V, with a
 /// long flat plateau in the middle — which is why a straight line from 4.2 V to 3.0 V reads
-/// far too high for most of the discharge. These anchors are the reference implementation's
-/// curve: matching them means our inferred percentage agrees with what `solaar show` prints for
-/// the same voltage (a headset at 3867 mV is 61 % to both of us), which is what makes the number
-/// checkable by a second opinion. The value is still inferred rather than reported, so it stays
-/// marked `~`. [`estimate_percent`] interpolates between the anchors.
+/// far too high for most of the discharge.
+///
+/// **Provenance: these anchors are Solaar's** (`logitech_receiver/hidpp20.py`,
+/// `estimate_battery_level_percentage`), reproduced so that our inferred percentage equals what
+/// `solaar show` prints for the same voltage — a headset at 3867 mV is 61 % to both tools, which
+/// is what makes the number checkable against a second opinion. Solaar is GPL-2.0-or-later and
+/// this project is MIT OR Apache-2.0, so the provenance is stated here rather than left implicit;
+/// replacing these anchors with a curve measured from our own devices removes the question
+/// entirely and is tracked in the README. The value is inferred rather than reported, so it
+/// stays marked `~`, and [`estimate_percent`] interpolates between the anchors.
 pub const VOLTAGE_CURVE: &[(u16, u8)] = &[
     (4186, 100),
     (4067, 90),
