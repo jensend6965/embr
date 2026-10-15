@@ -92,10 +92,12 @@ impl DeviceWorker {
 
             let mut refresh = false;
             let mut rescan = false;
+            let mut watch = false;
             let mut settings_changed = false;
             for command in batch {
                 match command {
                     Command::Refresh => refresh = true,
+                    Command::Watch => watch = true,
                     Command::Rescan => {
                         refresh = true;
                         rescan = true;
@@ -166,6 +168,18 @@ impl DeviceWorker {
                         }
                         settings_changed = true;
                     }
+                    Command::SetWatchDevices(enabled) => {
+                        match self.monitor.set_watch_devices(enabled) {
+                            Ok(()) => eprintln!(
+                                "[devices] devices will {} be checked between sweeps",
+                                if enabled { "" } else { "not" }
+                            ),
+                            Err(problem) => eprintln!(
+                                "[devices] the choice was applied but not saved: {problem}"
+                            ),
+                        }
+                        settings_changed = true;
+                    }
                     Command::SetCloseToTray(enabled) => {
                         match self.monitor.set_close_to_tray(enabled) {
                             Ok(()) => eprintln!(
@@ -203,6 +217,11 @@ impl DeviceWorker {
                 } else {
                     Patience::Scheduled
                 });
+            } else if watch {
+                // Not a sweep: every device is asked the one question that can have changed,
+                // with deadlines short enough (see `Patience::Watch`) to do this every few
+                // seconds. This is what makes a headset switching off show up in seconds.
+                self.sweep(Patience::Watch);
             } else if settings_changed {
                 // A settings change reaches the window and the tray now, from the readings
                 // already in hand: a sweep would take seconds and change nothing.
@@ -221,10 +240,10 @@ impl DeviceWorker {
             "[devices] {} device(s) read in {} ms{}",
             self.monitor.snapshot().devices.len(),
             started.elapsed().as_millis(),
-            if patience == Patience::Asked {
-                " (asked for, so the slow ones were given time)"
-            } else {
-                ""
+            match patience {
+                Patience::Asked => " (asked for, so the slow ones were given time)",
+                Patience::Watch => " (a watch pass)",
+                Patience::Scheduled => "",
             }
         );
         self.publish();
@@ -275,6 +294,7 @@ impl DeviceWorker {
             tray_shows_percent: config.ui.tray_shows_percent,
             tray_devices: config.ui.tray_devices.clone(),
             close_to_tray: config.general.close_to_tray,
+            watch_devices: config.general.watch_devices,
             config_path: default_path().display().to_string(),
             notice: self.monitor.notices.first().cloned(),
         };

@@ -29,6 +29,26 @@ it — see the repository README for the install steps.
   counts. A sweep of two receivers takes seconds, so it runs on its own thread: the window stays
   painted, the ages keep ticking, and the rows keep showing the previous reading while a sweep is
   in flight.
+* **Asks every device whether it is still there, every five seconds, while the window is open.**
+  A sweep on the user's interval is far too rare to notice a device *switching off* — the kernel
+  says nothing when a headset is powered down behind its dongle, which is the one case the uevents
+  below cannot see — so between sweeps Embr asks each device one question with deadlines short
+  enough to ask it again a few seconds later: 250 ms for the liveness ping, 700 ms for the battery
+  question (`Patience::Watch`). This is not the expensive kind of polling: a device that is there
+  answers in single-digit milliseconds, and one that has gone costs its deadline and no more. It is
+  `general.watch_devices` (on by default, a switch on the settings page) and it runs only while the
+  window is open — nobody is looking at a tray icon to see a device leave, and a tray-only Embr
+  stays as quiet towards the devices as it was before this existed.
+* **Gives up on a device that has not answered after one timeout.** A device that is switched off
+  answers nothing, and every call to it costs its whole deadline — so asking a silent device for a
+  name and then for four battery features spends six timeouts learning the same silence six times.
+  Two things stop that: the first question to a device is a single liveness ping on ROOT, and a
+  device that says nothing to it is written off for that pass (`discover::there`); and the report
+  size a device answers at (long or short HID++ reports — a device property, not a channel's) is
+  remembered for the life of the process instead of being rediscovered, at the price of a timeout,
+  on every pass (`transport::preferences`). Measured on this machine with a headset switched off
+  and two paired devices asleep: a scheduled sweep went from 20 s to 7 s, a Rescan from 39 s to
+  15 s, and a watch pass from 7 s to 2 s — with the headset itself costing 700 ms, one deadline.
 * **Rescan** (the header button, and the tray menu's item of the same name) is a *thorough*
   sweep: it reads everything now and gives the devices that have not answered yet the longer
   waits (`Patience::Asked`) that a device coming back from sleep needs, so a row that said *Not
@@ -54,9 +74,16 @@ it — see the repository README for the install steps.
 * **And asks again soon about a device that did not answer.** A sleeping device has not gone
   anywhere, so a sweep that could not read everything is repeated after ten seconds, then twenty,
   forty, eighty (`core::retry_interval`) — while the window is open, because that is when somebody
-  is looking at it. With the window closed the two-minute floor stands and the uevent above is
-  what catches a device really coming back; there is no point in waking a sleeping device every
+  is looking at it. With the watch above switched on, this ladder steps aside: a full sweep every
+  ten seconds and a watch pass every five are the same question asked twice, and the sweep is the
+  expensive way to ask it. With the window closed the two-minute floor stands and the uevent above
+  is what catches a device really coming back; there is no point in waking a sleeping device every
   ten seconds to redraw a tooltip nobody is reading.
+* **Says *Not answering* when nothing answered, even if a dongle did.** The G733's dongle replies
+  to a ping in 2 ms whether the headset behind it is on or off, so a ping is not evidence about the
+  device — the battery question is. A timeout in answer to *that* is silence, and silence is not
+  *Connected* (`discover::answered`): it is the difference between a row that quietly kept its old
+  percentage and a switched-off headset that says so.
 * **Between sweeps it holds no device open.** `Monitor::refresh_with()` opens what each query
   needs and closes it again before returning.
 * **Snooze** on every row calls `Monitor::snooze(device.key)`; the *Battery notifications*

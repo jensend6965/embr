@@ -700,6 +700,8 @@ export component AppWindow inherits Window {
     in property <[TrayChoice]> tray-choices: [];
     /// Keep running (tray only) when the window is closed, or quit instead.
     in-out property <bool> close-to-tray: true;
+    /// Ask each device whether it is still there between sweeps, while this window is open.
+    in-out property <bool> watch-devices: true;
     /// Where the settings on the settings page are written, so the page can say so.
     in property <string> config-path: "";
     /// Which page is showing: 0 is the devices, 1 is the settings. This one is the window's
@@ -718,6 +720,8 @@ export component AppWindow inherits Window {
     /// One device asked for (or gave up) its own tray icon.
     callback tray-device-toggled(string, bool);
     callback close-to-tray-toggled(bool);
+    /// The user turned the between-sweeps watch on or off.
+    callback watch-devices-toggled(bool);
     callback refresh-seconds-changed(int);
     callback quit-requested();
     callback show-about();
@@ -1118,6 +1122,17 @@ export component AppWindow inherits Window {
 
                         Caption {
                             text: "With the window closed Embr slows down to a read every two minutes; it reads everything the moment the window comes back. Rescan reads now, and gives a device that has been asleep longer to answer.";
+                        }
+
+                        SettingRow {
+                            title: "Notice a device going quiet";
+                            with-switch: true;
+                            toggled <=> root.watch-devices;
+                            changed(v) => { root.watch-devices-toggled(v); }
+                        }
+
+                        Caption {
+                            text: "Asks every device one short question every five seconds, while this window is open, so a headset switched off shows up in seconds rather than at the next refresh. Turn it off to leave the devices alone between refreshes.";
                         }
 
                         SettingRow {

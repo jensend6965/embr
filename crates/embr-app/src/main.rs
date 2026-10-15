@@ -57,6 +57,7 @@ struct Pushed {
     notifications: Rc<Cell<bool>>,
     tray_percent: Rc<Cell<bool>>,
     close_to_tray: Rc<Cell<bool>>,
+    watch_devices: Rc<Cell<bool>>,
     alert_pending: Pending,
     refresh_pending: Pending,
 }
@@ -67,6 +68,7 @@ impl Pushed {
             notifications: Rc::new(Cell::new(false)),
             tray_percent: Rc::new(Cell::new(false)),
             close_to_tray: Rc::new(Cell::new(true)),
+            watch_devices: Rc::new(Cell::new(true)),
             alert_pending: Pending::new(),
             refresh_pending: Pending::new(),
         }
@@ -161,6 +163,10 @@ fn main() -> Result<(), slint::PlatformError> {
     // one that draws its opening size inside a bigger frame, and that is not visible in a
     // screenshot of the frame alone.
     let last_size = Rc::new(Cell::new((0u32, 0u32)));
+    // When the devices were last asked whether they are still there. Its own clock, not the
+    // sweep's: a watch must not reset the sweep interval, or a five-second watch would mean the
+    // configured sweep never happened.
+    let last_watch = Rc::new(Cell::new(Instant::now()));
     // How many sweeps in a row could not read every device. `core::next_sweep` turns that into a
     // shorter interval, so a device that has just been picked up appears in the window within
     // seconds instead of at the next scheduled sweep.
@@ -337,6 +343,24 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    window.on_watch_devices_toggled({
+        let commands = commands.clone();
+        let pushed = pushed.clone();
+        move |enabled| {
+            if enabled == pushed.watch_devices.get() {
+                return;
+            }
+            pushed.watch_devices.set(enabled);
+            eprintln!(
+                "[app] devices will {} be checked between sweeps",
+                if enabled { "" } else { "not" }
+            );
+            if commands.send(Command::SetWatchDevices(enabled)).is_err() {
+                eprintln!("[app] the device thread has stopped; the choice was not saved");
+            }
+        }
+    });
+
     window.on_rescan({
         let window = window.as_weak();
         let commands = commands.clone();
@@ -467,6 +491,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let window_open = window_open.clone();
         let last_refresh = last_refresh.clone();
         let last_size = last_size.clone();
+        let last_watch = last_watch.clone();
         let attempts = attempts.clone();
         let choices = choices.clone();
         move || {
@@ -519,6 +544,10 @@ fn main() -> Result<(), slint::PlatformError> {
                         &window, &latest, &selection, &rows, &choices, &pushed, state,
                     );
                 }
+                // A pass has just finished. The next watch is counted from here rather than from
+                // the moment one was asked for: a pass that took longer than the watch interval
+                // would otherwise leave a queue of watches stacked behind it.
+                last_watch.set(Instant::now());
                 // A sweep that could not read something is worth repeating soon; one that read
                 // everything starts the count again. `core::next_sweep` decides what the count is
                 // worth — this only counts.
@@ -556,18 +585,35 @@ fn main() -> Result<(), slint::PlatformError> {
                 attempts.set(0);
             }
 
-            // 4. The sweep the application schedules for itself: the interval the user chose while
-            // the window is open, a much slower one while it is only a tray icon, and — while the
-            // window is open — a quick retry after a sweep that could not read something.
-            // `core::next_sweep` decides the number; this only counts.
+            // 4. What to ask the devices next: a sweep when the interval is up (or when a device
+            // arrived or left), and a watch pass in between — while the window is open — so that a
+            // device switching off is noticed in seconds rather than at the next sweep.
+            // `core::next_sweep` and `core::watch_interval` decide the numbers; this only counts.
             let seconds = latest
                 .borrow()
                 .as_ref()
                 .map(|state| state.refresh_seconds)
                 .unwrap_or(60);
-            let interval = embr_core::next_sweep(seconds, window_open.get(), attempts.get());
-            if device_changed || last_refresh.get().elapsed() >= interval {
+            let watching = latest
+                .borrow()
+                .as_ref()
+                .map(|state| state.watch_devices)
+                .unwrap_or(true);
+            let watching_now = embr_core::watch_interval(watching, window_open.get());
+            let interval = embr_core::next_sweep(
+                seconds,
+                window_open.get(),
+                attempts.get(),
+                watching_now.is_some(),
+            );
+            let sweep_due = device_changed || last_refresh.get().elapsed() >= interval;
+            let watch_due =
+                watching_now.is_some_and(|interval| last_watch.get().elapsed() >= interval);
+
+            if sweep_due {
                 last_refresh.set(Instant::now());
+                // A sweep asks everything a watch would, and then some.
+                last_watch.set(Instant::now());
                 let reason = if device_changed {
                     "[app] sweeping now: a device arrived or left"
                 } else if attempts.get() > 0 {
@@ -585,6 +631,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 if commands.send(Command::Refresh).is_err() {
                     eprintln!("[app] the device thread has stopped; nothing was refreshed");
+                }
+            } else if watch_due {
+                last_watch.set(Instant::now());
+                eprintln!("[app] watch pass: asking each device whether it is still there");
+                // Deliberately no `set_refreshing`: this happens every few seconds and the
+                // window should not announce a scan that the user did not ask for.
+                if commands.send(Command::Watch).is_err() {
+                    eprintln!("[app] the device thread has stopped; the devices were not watched");
                 }
             }
         }
@@ -662,6 +716,8 @@ fn apply(
     window.set_tray_percent(state.tray_shows_percent);
     pushed.close_to_tray.set(state.close_to_tray);
     window.set_close_to_tray(state.close_to_tray);
+    pushed.watch_devices.set(state.watch_devices);
+    window.set_watch_devices(state.watch_devices);
     apply_alert_level(window, &state, selection, pushed);
     apply_refresh_interval(window, &state, pushed);
     window.set_refreshing(false);

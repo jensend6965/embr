@@ -18,6 +18,10 @@ pub enum Command {
     /// Read every device now because the user asked, with the longer waits that give a device
     /// coming back from sleep a chance to answer.
     Rescan,
+    /// Ask every device whether it is still there, with deadlines short enough to do it every few
+    /// seconds. This is what notices a device switching off while the user is looking at the
+    /// window, instead of the next scheduled sweep finding out.
+    Watch,
     /// Keep quiet about one device for the configured snooze period.
     Snooze(String),
     /// Turn battery notifications on or off and remember the choice.
@@ -30,6 +34,9 @@ pub enum Command {
     SetTrayDevice { key: String, on: bool },
     /// Keep running when the window is closed (tray only), or quit instead.
     SetCloseToTray(bool),
+    /// Ask the devices whether they are still there, while the window is open, or leave it to the
+    /// sweeps.
+    SetWatchDevices(bool),
     /// How often a fresh reading is taken while the window is open.
     SetRefreshSeconds(u64),
 }
@@ -63,6 +70,8 @@ pub struct UiState {
     /// The devices the user gave a tray icon of their own, by key.
     pub tray_devices: Vec<String>,
     pub close_to_tray: bool,
+    /// Whether a device switching off is noticed within seconds rather than at the next sweep.
+    pub watch_devices: bool,
     /// Where the settings on the settings page are written, so the page can say so.
     pub config_path: String,
     pub notice: Option<String>,

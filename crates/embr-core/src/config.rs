@@ -21,6 +21,11 @@ pub const FILE_NAME: &str = "config.toml";
 pub struct General {
     /// How often the device list and batteries are refreshed, in seconds.
     pub refresh_seconds: u64,
+    /// Ask each device whether it is still there, every few seconds, while the window is open.
+    /// On by default: a headset switched off should show up while the user is still looking at the
+    /// window, not at the next sweep. Turning it off leaves the sweeps to notice, and costs the
+    /// devices a good deal less.
+    pub watch_devices: bool,
     /// What the window's close button does: `true` keeps the app running (tray only), `false`
     /// quits. On by default — a battery monitor that stops watching when its window is closed
     /// is a battery monitor that is not watching.
@@ -32,6 +37,7 @@ impl Default for General {
         Self {
             refresh_seconds: 60,
             close_to_tray: true,
+            watch_devices: true,
         }
     }
 }
@@ -269,6 +275,10 @@ mod tests {
         assert!(
             config.general.close_to_tray,
             "an absent key means the default, which is to keep running"
+        );
+        assert!(
+            config.general.watch_devices,
+            "and a config written before the watch existed watches for devices by default"
         );
     }
 

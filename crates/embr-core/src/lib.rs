@@ -85,12 +85,41 @@ pub fn retry_interval(attempts: u32) -> Duration {
 /// sleeping device every ten seconds to redraw a tray tooltip spends its battery on nothing. A
 /// device that comes back while the window is closed is caught by [`Uevents`] instead, which
 /// costs nothing at all until something actually changes.
-pub fn next_sweep(refresh_seconds: u64, window_open: bool, missing_attempts: u32) -> Duration {
+///
+/// A device that could not be read is normally the reason to come back sooner than the interval the
+/// user chose — that ladder is how a device coming back from sleep is caught while somebody is
+/// looking at the window. `watching` says that something else is already asking between sweeps (see
+/// [`watch_interval`]): with a watch pass running every five seconds, a full sweep every ten would
+/// be the same question asked twice, the second time expensively.
+pub fn next_sweep(
+    refresh_seconds: u64,
+    window_open: bool,
+    missing_attempts: u32,
+    watching: bool,
+) -> Duration {
     let normal = scheduled_interval(refresh_seconds, window_open);
-    if !window_open || missing_attempts == 0 {
+    if !window_open || watching || missing_attempts == 0 {
         return normal;
     }
     normal.min(retry_interval(missing_attempts))
+}
+
+/// How often a device is asked whether it is still there, while the window is open.
+///
+/// Five seconds is the difference between "I switched my headset off and Embr knew" and "I waited,
+/// gave up, and pressed Rescan". Each pass costs one short query per device and is over in well
+/// under a second (a device that is there answers in milliseconds; one that is gone costs its
+/// deadline and nothing more), so this is not the expensive kind of polling — the expensive kind is
+/// asking a *sleeping* wireless device and waking it, which is what the long sweep interval is for.
+pub const WATCH_SECONDS: u64 = 5;
+
+/// How long until the next watch pass, if there should be one at all.
+///
+/// `None` is the answer with the setting off and with the window closed: nobody is looking at the
+/// window, a device switching off is not news that needs announcing, and a tray-only Embr stays as
+/// quiet towards the devices as it was before this existed.
+pub fn watch_interval(watch_devices: bool, window_open: bool) -> Option<Duration> {
+    (watch_devices && window_open).then(|| Duration::from_secs(WATCH_SECONDS))
 }
 
 /// Holds the configuration, the battery policy and the latest snapshot.
@@ -241,6 +270,12 @@ impl Monitor {
     /// it survives a sweep that could not read the device and a restart of the app.
     pub fn set_tray_device(&mut self, key: &str, on: bool) -> Result<(), String> {
         self.config.set_tray_device(key, on);
+        self.save_config()
+    }
+
+    /// Ask the devices whether they are still there between sweeps, or leave it to the sweeps.
+    pub fn set_watch_devices(&mut self, enabled: bool) -> Result<(), String> {
+        self.config.general.watch_devices = enabled;
         self.save_config()
     }
 
@@ -432,12 +467,12 @@ mod tests {
     #[test]
     fn a_sweep_that_could_not_read_something_is_repeated_sooner() {
         assert_eq!(
-            next_sweep(60, true, 0),
+            next_sweep(60, true, 0, false),
             Duration::from_secs(60),
             "nothing missing: the interval the user chose"
         );
         assert_eq!(
-            next_sweep(60, true, 1),
+            next_sweep(60, true, 1, false),
             Duration::from_secs(10),
             "a device that is not answering is asked again while the user is watching"
         );
@@ -447,25 +482,59 @@ mod tests {
             "and then less often, so a device that is switched off is not woken for nothing"
         );
         assert_eq!(
-            next_sweep(600, true, 99),
+            next_sweep(600, true, 99, false),
             Duration::from_secs(80),
             "the retry backs off no further than 80 s, however long the user's interval is"
         );
         assert_eq!(
-            next_sweep(60, true, 99),
+            next_sweep(60, true, 99, false),
             Duration::from_secs(60),
             "and once the backoff passes the user's own interval, that interval is what happens"
         );
         assert_eq!(
-            next_sweep(30, true, 99),
+            next_sweep(30, true, 99, false),
             Duration::from_secs(30),
             "and it never scans less often than the user asked for"
         );
         assert_eq!(
-            next_sweep(60, false, 3),
+            next_sweep(60, false, 3, false),
             Duration::from_secs(HIDDEN_REFRESH_FLOOR_SECONDS),
             "with the window closed nothing is woken to update a tooltip: the floor stands, and a \
              device that really comes back is caught by its uevent instead"
+        );
+    }
+
+    #[test]
+    fn watching_between_sweeps_takes_over_from_the_retry_ladder() {
+        assert_eq!(
+            next_sweep(600, true, 3, true),
+            Duration::from_secs(600),
+            "with a watch pass asking every few seconds, a full sweep a minute would be the same \
+             question twice — and the sweep is the expensive way to ask it"
+        );
+        assert_eq!(
+            next_sweep(60, false, 3, false),
+            Duration::from_secs(HIDDEN_REFRESH_FLOOR_SECONDS),
+            "and with the window closed there is no watch to defer to, so the floor does the work"
+        );
+    }
+
+    #[test]
+    fn the_watch_runs_only_when_somebody_is_looking() {
+        assert_eq!(
+            watch_interval(true, true),
+            Some(Duration::from_secs(WATCH_SECONDS)),
+            "with the window open and the setting on, every device is asked whether it is there"
+        );
+        assert_eq!(
+            watch_interval(false, true),
+            None,
+            "the setting turns it off, and the sweeps notice instead"
+        );
+        assert_eq!(
+            watch_interval(true, false),
+            None,
+            "a tray-only Embr does not wake devices to learn that they are asleep"
         );
     }
 
