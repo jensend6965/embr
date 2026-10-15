@@ -99,7 +99,11 @@ component BatteryBar inherits Rectangle {
     border-radius: 3px;
     background: Tokens.track;
 
+    // `x: 0` is load-bearing: a child Rectangle that sets only `width` is centred inside its
+    // parent, which makes a progress bar shrink from both ends instead of from the right.
     Rectangle {
+        x: 0;
+        y: 0;
         width: max(0px, parent.width * percent / 100);
         height: parent.height;
         border-radius: 3px;
