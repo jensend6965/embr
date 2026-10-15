@@ -191,6 +191,7 @@ mod tests {
             wpid: None,
             battery: reading,
             error: None,
+            responded: true,
         }
     }
 
@@ -265,8 +266,9 @@ mod tests {
             tooltip.contains("G703 LIGHTSPEED — ~88% (Discharging)"),
             "{tooltip}"
         );
-        // a device without a reading must not produce a doubled "— —"
-        assert!(tooltip.contains("G915 TKL — Unavailable"), "{tooltip}");
+        // a device without a reading must not produce a doubled "— —", and it says why: this
+        // one answered us but had no battery to report
+        assert!(tooltip.contains("G915 TKL — Connected"), "{tooltip}");
         assert!(!tooltip.contains("— —"), "{tooltip}");
     }
 

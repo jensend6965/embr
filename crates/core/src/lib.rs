@@ -160,6 +160,7 @@ mod tests {
                 ChargeStatus::Discharging,
             )),
             error: None,
+            responded: true,
         }
     }
 
