@@ -1,0 +1,12 @@
+[package]
+name = "battery"
+version = "0.1.0"
+edition = "2021"
+description = "Spike 001: read Logitech battery state directly over HID++ via raw hidraw I/O (no Python, no Solaar)"
+
+[[bin]]
+name = "battery"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"

@@ -1,0 +1,462 @@
+// Solaar-modern main window proxy — Slint spike 002a
+import { Palette, ScrollView, Switch } from "std-widgets.slint";
+
+export struct Device {
+    icon: string,
+    name: string,
+    kind: string,
+    connection: string,
+    percent: int,
+    millivolts: int,
+    status: string,
+    updated: string,
+}
+
+global Tokens {
+    out property <color> bg: #15161a;
+    out property <color> surface: #1c1e23;
+    out property <color> surface-raised: #23262c;
+    out property <color> track: #303439;
+    out property <color> border-subtle: #2b2f36;
+    out property <color> text-primary: #e7e9ec;
+    out property <color> text-secondary: #9ba1a9;
+    out property <color> text-tertiary: #6c737c;
+    out property <color> accent: #5aa9f7;
+    out property <color> green: #3ddc97;
+    out property <color> amber: #f4c150;
+    out property <color> red: #f2726f;
+    out property <color> blue: #6aa8ff;
+
+    public pure function conn-color(c: string) -> color {
+        if (c == "Lightspeed") { return blue; }
+        if (c == "Bolt") { return green; }
+        return text-secondary;
+    }
+
+    public pure function status-color(s: string) -> color {
+        if (s == "Charging") { return green; }
+        if (s == "Discharging") { return amber; }
+        return text-tertiary;
+    }
+
+    public pure function bar-color(s: string, p: int) -> color {
+        if (s == "Offline") { return text-tertiary; }
+        if (p <= 20) { return red; }
+        return green;
+    }
+}
+
+component Badge inherits Rectangle {
+    in property <string> label;
+    in property <color> tint: Tokens.text-secondary;
+
+    height: 20px;
+    width: badge-text.preferred-width + 16px;
+    border-radius: 10px;
+    background: tint.with-alpha(0.14);
+    border-width: 1px;
+    border-color: tint.with-alpha(0.28);
+
+    badge-text := Text {
+        text: label;
+        font-size: 10px;
+        font-weight: 700;
+        color: tint;
+        letter-spacing: 0.4px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+        width: 100%;
+    }
+}
+
+component BatteryBar inherits Rectangle {
+    in property <int> percent;
+    in property <color> fill-color: Tokens.green;
+
+    height: 6px;
+    border-radius: 3px;
+    background: Tokens.track;
+
+    Rectangle {
+        width: max(0px, parent.width * percent / 100);
+        height: parent.height;
+        border-radius: 3px;
+        background: fill-color;
+    }
+}
+
+component DeviceRow inherits Rectangle {
+    in property <Device> device;
+    in property <bool> is-selected: false;
+    callback pick;
+
+    height: 90px;
+    border-radius: 12px;
+    background: is-selected ? Tokens.surface-raised : Tokens.surface;
+    border-width: 1px;
+    border-color: is-selected ? Tokens.accent.with-alpha(0.55) : Tokens.border-subtle;
+    animate background, border-color { duration: 120ms; }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 14px;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: 42px;
+            height: 42px;
+            border-radius: 11px;
+            background: Tokens.conn-color(device.connection).with-alpha(0.13);
+            border-width: 1px;
+            border-color: Tokens.conn-color(device.connection).with-alpha(0.25);
+
+            Text {
+                text: device.icon;
+                font-size: 16px;
+                font-weight: 700;
+                color: Tokens.conn-color(device.connection);
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                Text {
+                    text: device.name;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Tokens.text-primary;
+                    vertical-alignment: center;
+                }
+
+                Badge {
+                    label: device.connection;
+                    tint: Tokens.conn-color(device.connection);
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+
+                BatteryBar {
+                    horizontal-stretch: 1;
+                    percent: device.percent;
+                    fill-color: Tokens.bar-color(device.status, device.percent);
+                }
+
+                Text {
+                    text: "\{device.percent}%";
+                    width: 36px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Tokens.text-secondary;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                cross-axis-alignment: center;
+
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Tokens.status-color(device.status);
+                }
+
+                Text {
+                    text: device.status;
+                    font-size: 12px;
+                    color: Tokens.status-color(device.status);
+                    vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+    }
+
+    TouchArea {
+        clicked => { root.pick(); }
+    }
+}
+
+component StatTile inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <color> value-color: Tokens.text-primary;
+
+    height: 60px;
+    horizontal-stretch: 1;
+    border-radius: 10px;
+    background: Tokens.surface-raised;
+    border-width: 1px;
+    border-color: Tokens.border-subtle;
+
+    VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        spacing: 3px;
+        alignment: center;
+
+        Text {
+            text: label;
+            font-size: 10px;
+            font-weight: 600;
+            color: Tokens.text-tertiary;
+            letter-spacing: 0.5px;
+        }
+
+        Text {
+            text: value;
+            font-size: 15px;
+            font-weight: 600;
+            color: value-color;
+        }
+    }
+}
+
+component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <bool> with-switch: false;
+    in-out property <bool> toggled: false;
+
+    height: 46px;
+    border-radius: 10px;
+    background: Tokens.surface-raised;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 10px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        Text {
+            text: title;
+            font-size: 13px;
+            color: Tokens.text-primary;
+            vertical-alignment: center;
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        if with-switch: Switch {
+            checked <=> root.toggled;
+        }
+
+        if !with-switch: Text {
+            text: value;
+            font-size: 13px;
+            color: Tokens.text-secondary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Devices";
+    width: 900px;
+    height: 560px;
+    background: Tokens.bg;
+
+    in-out property <[Device]> devices;
+    in-out property <int> selected-index: 0;
+    in-out property <bool> battery-notifications: true;
+
+    property <Device> selected: devices[selected-index];
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    VerticalLayout {
+        // ---- header ----
+        HorizontalLayout {
+            height: 64px;
+            padding-left: 24px;
+            padding-right: 24px;
+            cross-axis-alignment: center;
+
+            Text {
+                text: "Devices";
+                font-size: 20px;
+                font-weight: 700;
+                color: Tokens.text-primary;
+                vertical-alignment: center;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Text {
+                text: "Last updated 12:41";
+                font-size: 12px;
+                color: Tokens.text-tertiary;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+        // ---- body ----
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 18px;
+            padding-bottom: 18px;
+            spacing: 20px;
+
+            // left: device list
+            ScrollView {
+                width: 440px;
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    spacing: 10px;
+
+                    for d[i] in devices: DeviceRow {
+                        device: d;
+                        is-selected: i == root.selected-index;
+                        pick => { root.selected-index = i; }
+                    }
+                }
+            }
+
+            // right: details card
+            Rectangle {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                border-radius: 14px;
+                background: Tokens.surface;
+                border-width: 1px;
+                border-color: Tokens.border-subtle;
+                drop-shadow-blur: 16px;
+                drop-shadow-color: #00000055;
+                drop-shadow-offset-y: 4px;
+
+                VerticalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    spacing: 14px;
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        cross-axis-alignment: center;
+
+                        Rectangle {
+                            width: 46px;
+                            height: 46px;
+                            border-radius: 12px;
+                            background: Tokens.accent.with-alpha(0.14);
+                            border-width: 1px;
+                            border-color: Tokens.accent.with-alpha(0.28);
+
+                            Text {
+                                text: root.selected.icon;
+                                font-size: 18px;
+                                font-weight: 700;
+                                color: Tokens.accent;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 3px;
+                            alignment: center;
+
+                            Text {
+                                text: root.selected.name;
+                                font-size: 16px;
+                                font-weight: 600;
+                                color: Tokens.text-primary;
+                            }
+
+                            Text {
+                                text: root.selected.kind;
+                                font-size: 12px;
+                                color: Tokens.text-tertiary;
+                            }
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+
+                        Badge {
+                            label: root.selected.connection;
+                            tint: Tokens.conn-color(root.selected.connection);
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        StatTile {
+                            label: "BATTERY";
+                            value: "\{root.selected.percent}%";
+                            value-color: Tokens.bar-color(root.selected.status, root.selected.percent);
+                        }
+
+                        StatTile {
+                            label: "VOLTAGE";
+                            value: root.selected.millivolts > 0 ? "\{root.selected.millivolts} mV" : "—";
+                        }
+
+                        StatTile {
+                            label: "UPDATED";
+                            value: root.selected.updated;
+                        }
+                    }
+
+                    BatteryBar {
+                        percent: root.selected.percent;
+                        fill-color: Tokens.bar-color(root.selected.status, root.selected.percent);
+                    }
+
+                    Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+                    Text {
+                        text: "SETTINGS";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Tokens.text-tertiary;
+                        letter-spacing: 0.6px;
+                    }
+
+                    SettingRow {
+                        title: "Battery notifications";
+                        with-switch: true;
+                        toggled <=> root.battery-notifications;
+                    }
+
+                    SettingRow {
+                        title: "Notification thresholds";
+                        value: "20% / 10%";
+                    }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+            }
+        }
+    }
+}

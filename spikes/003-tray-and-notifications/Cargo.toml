@@ -1,0 +1,19 @@
+[package]
+name = "solaar-tray-spike"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "solaar-tray-spike"
+path = "src/main.rs"
+
+[dependencies]
+ksni = "0.2.2"
+notify-rust = "4.11"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = false
