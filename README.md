@@ -51,8 +51,9 @@ Practically: read it before you run it, and report what breaks. HID++ has no rea
 * **Charge for every device it can reach**, headsets included. They report it through a different
   feature than mice and keyboards, and while one is idle there may be nothing to report — Embr says
   so instead of guessing.
-* **Nothing invented.** A device that answered but has no reading to give is *Connected*; one that
-  did not answer is *Not answering*; a percentage worked out from voltage is marked `~`, and a
+* **Nothing invented.** A device that answered *about itself* but has no reading to give is
+  *Connected*; one that said nothing to the question is *Not answering* — a dongle answering for a
+  switched-off headset does not count; a percentage worked out from voltage is marked `~`, and a
   percentage a device reports itself always wins.
 * **Worst battery first**, with the age of each reading beside it.
 * **A window that uses the width it is given.** Dragged wider, the device list stops at a
@@ -63,12 +64,14 @@ Practically: read it before you run it, and report what breaks. HID++ has no rea
   at the interval you choose; with the window closed it backs off to no more than once every two
   minutes, and reads everything the moment the window comes back. **Rescan** reads now, and gives
   a device that has been asleep longer to answer before writing it off as *Not answering*.
-* **It notices a device by itself.** Pick a mouse up, switch a keyboard on, plug a headset back
-  in — the kernel says a HID device came or went, Embr hears it and sweeps at once, so the row
-  stops saying *Not answering* without anyone pressing anything. A device the last sweep could not
-  read is also asked again within ten seconds (doubling to eighty) while the window is open. The
-  listening costs nothing between events: there is no polling of the hardware, because on a
-  wireless device every such question wakes it.
+  Between those sweeps every device is asked one short question — are you still there — every five
+  seconds, which is what makes a device switching off visible in seconds rather than at the next
+  interval. It is a switch on the settings page and on by default.
+* **It notices a device by itself.** Switch a headset off, pick a mouse up, switch a keyboard on,
+  plug a receiver back in: a device that stops answering shows up as *Not answering* within a few
+  seconds, and one that comes back does too, from the kernel — a HID device that came or went is
+  announced by a uevent, which Embr hears and sweeps on at once. Nothing is polled to find out that
+  nothing changed: between the short questions above, listening costs nothing.
 * **Tray icon and notifications.** The icon is a battery coloured by the worst device — or the
   worst level itself, as a number, if you would rather read it than measure it. Any device can be
   given an icon of its own instead (Settings → Tray): one icon per device, each showing *its* level,
