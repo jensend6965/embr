@@ -1,6 +1,14 @@
+# Rust build output
 target/
-*.tmp
+
 # Throwaway experiment output: spike READMEs and sources are kept, their build directories and
 # screenshot dumps are not.
 spikes/*/evidence/
+
+*.tmp
 *.log
+
+# Editors and OS noise
+*.swp
+*~
+.DS_Store

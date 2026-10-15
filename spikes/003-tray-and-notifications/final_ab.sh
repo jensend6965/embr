@@ -2,7 +2,7 @@
 # Final A/B on the pinned allowlist + the money-shot capture (tray icon AND notification OSD together).
 # Usage: ./final_ab.sh <tag> [extra env assignments...]
 set -u
-SPIKE=/home/jensend/Projects/logi-modern/spikes/003-tray-and-notifications
+SPIKE=<repo>/spikes/003-tray-and-notifications
 EV=$SPIKE/evidence
 LOG=/home/jensend/.local/share/noctalia-kwe.log
 TAG="${1:-d1}"

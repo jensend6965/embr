@@ -147,7 +147,7 @@ Documented limitations (none of which stop the UI from being built):
 
 ```sh
 export PATH=$HOME/.cargo/bin:$PATH
-cd /home/jensend/Projects/logi-modern/spikes/002a-slint-gui
+cd <repo>/spikes/002a-slint-gui
 cargo build --release
 ./target/release/devices          # 900x560 window titled "Devices"
 bash measure_startup.sh           # spawn -> window-shown, in ms

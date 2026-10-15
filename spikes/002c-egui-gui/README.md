@@ -149,7 +149,7 @@ non-native look. None of those stop this UI from being built — they are the wo
 
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH
-cd /home/jensend/Projects/logi-modern/spikes/002c-egui-gui
+cd <repo>/spikes/002c-egui-gui
 
 cargo clean && time cargo build --release      # 45.7 s cold
 cargo tree --edges normal | wc -l              # 736

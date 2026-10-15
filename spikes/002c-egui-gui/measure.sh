@@ -2,7 +2,7 @@
 # Spike 002c runtime measurement: startup, RSS, screenshot.
 set -u
 export PATH=$HOME/.cargo/bin:$PATH
-cd /home/jensend/Projects/logi-modern/spikes/002c-egui-gui
+cd <repo>/spikes/002c-egui-gui
 export WAYLAND_DISPLAY=wayland-0
 
 LOG=/tmp/egui-release.log

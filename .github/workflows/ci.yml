@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Slint's Gl/Femtovg renderer links against the system font and input stack. This is the
+      # Debian/Ubuntu package list its own instructions give; the repository needs no other
+      # system dependency (the protocol crate depends on `libc` alone).
+      - name: system libraries for the Slint build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libgl1-mesa-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: formatting
+        run: cargo fmt --all --check
+
+      - name: lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The tests exercise the protocol and the policy with captured frames and an injected
+      # clock, so they need no Logitech hardware and no display.
+      - name: tests
+        run: cargo test --workspace

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 export WAYLAND_DISPLAY=wayland-0
-cd /home/jensend/Projects/logi-modern/spikes/002c-egui-gui
+cd <repo>/spikes/002c-egui-gui
 LOG=/tmp/egui-shot4.log; : > "$LOG"
 rm -f c_*.png
 ./target/release/spike-egui > "$LOG" 2>&1 &

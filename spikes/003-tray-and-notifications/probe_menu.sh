@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dump the live SNI + com.canonical.dbusmenu layout of the running tray item.
 set -u
-SPIKE=/home/jensend/Projects/logi-modern/spikes/003-tray-and-notifications
+SPIKE=<repo>/spikes/003-tray-and-notifications
 EV=$SPIKE/evidence
 TAG="${1:-menu}"
 shift || true

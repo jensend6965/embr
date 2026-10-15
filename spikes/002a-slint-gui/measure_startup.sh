@@ -2,7 +2,7 @@
 # Spike 002a: cold-start wall time, process spawn -> window shown.
 # Launcher stamps CLOCK_REALTIME ns immediately before spawn; the app prints
 # WINDOW_SHOWN_MS (ms since the same epoch) right after ui.show() returns.
-APP=/home/jensend/Projects/logi-modern/spikes/002a-slint-gui/target/release/devices
+APP=<repo>/spikes/002a-slint-gui/target/release/devices
 LOG=/tmp/devices_startup.log
 : > "$LOG"
 

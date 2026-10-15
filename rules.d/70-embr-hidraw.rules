@@ -1,0 +1,32 @@
+# Embr — access to Logitech HID++ devices as the logged-in user.
+#
+# HID++ requests travel over raw hidraw nodes, which are root-only by default; without this rule
+# Embr cannot read a battery as a normal user. `uaccess` hands the node to whoever is logged in
+# on the seat (systemd-logind), so Embr needs no root program and no system service.
+#
+# Install:
+#   sudo install -m 0644 rules.d/70-embr-hidraw.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
+#
+# Note that being able to write to these nodes is not harmless — it is enough to start a
+# firmware update — which is why access goes to the seat's user rather than to everyone.
+
+ACTION=="remove", GOTO="embr_end"
+SUBSYSTEM!="hidraw", GOTO="embr_end"
+
+# Logitech USB receivers and directly attached devices (Logitech's USB vendor id)
+ATTRS{idVendor}=="046d", GOTO="embr_apply"
+
+# Lenovo-branded Logitech nano receivers
+ATTRS{idVendor}=="17ef", ATTRS{idProduct}=="6042", GOTO="embr_apply"
+
+# Bluetooth-attached Logitech devices
+KERNELS=="0005:046D:*", GOTO="embr_apply"
+
+GOTO="embr_end"
+
+LABEL="embr_apply"
+TAG+="uaccess"
+
+LABEL="embr_end"
+# vim: ft=udevrules

@@ -4,7 +4,7 @@
 # Starts the spike, screenshots while tray+OSD are up, records RSS and D-Bus state.
 set -u
 export PATH="$HOME/.cargo/bin:$PATH"
-SPIKE=/home/jensend/Projects/logi-modern/spikes/003-tray-and-notifications
+SPIKE=<repo>/spikes/003-tray-and-notifications
 EV=$SPIKE/evidence
 TAG="${1:-run1}"
 shift || true

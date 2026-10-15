@@ -1,7 +1,7 @@
 # Spike 003 — StatusNotifierItem tray icon + desktop notification on KineticWE / Noctalia
 
 **Date:** 2026-10-15 · **Host:** KineticWE (KWin + Noctalia 5.2.0), Wayland (`wayland-0`), Rust 1.99.0
-**Work dir:** `/home/jensend/Projects/logi-modern/spikes/003-tray-and-notifications`
+**Work dir:** `<repo>/spikes/003-tray-and-notifications`
 
 ---
 
@@ -43,7 +43,7 @@ One small Rust binary that does all three steps in order and logs one line per s
 
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH
-cd /home/jensend/Projects/logi-modern/spikes/003-tray-and-notifications
+cd <repo>/spikes/003-tray-and-notifications
 cargo build --release
 ./target/release/solaar-tray-spike                      # tray + notification, 40 s, then clean exit
 # harnesses used for the evidence below:

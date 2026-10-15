@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 export WAYLAND_DISPLAY=wayland-0
-cd /home/jensend/Projects/logi-modern/spikes/002c-egui-gui
+cd <repo>/spikes/002c-egui-gui
 ./target/release/spike-egui > /tmp/egui-idle.log 2>&1 &
 PID=$!
 sleep 4
