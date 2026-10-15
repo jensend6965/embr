@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Device row — leading element options</title>
+<style>
+  /* Mockup of the app's dark row at 1:1 scale, using the app's own palette. */
+  :root{
+    --bg:#15161a; --surface:#1c1e23; --raised:#23262c; --track:#303439;
+    --line:#2b2f36; --fg:#e7e9ec; --fg2:#9ba1a9; --fg3:#6c737c;
+    --green:#3ddc97; --amber:#f4c150; --red:#f2726f; --blue:#6aa8ff;
+  }
+  body{margin:0;font:13px/1.4 "Inter","Cantarell","Segoe UI",system-ui,sans-serif;color:var(--fg);}
+  .wrap{display:flex;flex-direction:column;gap:18px;max-width:560px;}
+  .variant{display:flex;flex-direction:column;gap:6px;}
+  .vhead{display:flex;align-items:baseline;gap:8px;}
+  .vlabel{font-weight:700;font-size:12px;letter-spacing:.3px;color:var(--fg);}
+  .vnote{font-size:11px;color:var(--fg3);}
+  .cards{display:flex;flex-direction:column;gap:8px;}
+  .card{
+    display:flex;align-items:center;gap:12px;
+    height:96px;box-sizing:border-box;padding:0 14px;
+    background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  }
+  .card.sel{background:var(--raised);border-color:#5aa9f78c;}
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;}
+  .line1{display:flex;align-items:center;gap:8px;min-width:0;}
+  .name{font-weight:700;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .badge{font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:10px;white-space:nowrap;}
+  .b-ls{color:var(--blue);background:#6aa8ff24;border:1px solid #6aa8ff47;}
+  .b-bolt{color:var(--green);background:#3ddc9724;border:1px solid #3ddc9747;}
+  .b-usb{color:var(--fg2);background:#9ba1a924;border:1px solid #9ba1a947;}
+  .line2{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--fg2);}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--amber);flex:none;}
+  .dot.off{background:var(--fg3);}
+  .status{color:var(--amber);}
+  .status.off{color:var(--fg3);}
+  .kind{color:var(--fg3);}
+  .spacer{flex:1;}
+  .age{color:var(--fg3);}
+  .snooze{font-size:11px;color:var(--fg2);background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:5px 10px;}
+  /* A: charge ring */
+  .ring{width:46px;height:46px;flex:none;position:relative;}
+  .ring svg{transform:rotate(-90deg);}
+  .ring .num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+  /* B: battery glyph with proportional fill */
+  .cell{width:54px;height:26px;flex:none;position:relative;}
+  /* C: kind glyph tile */
+  .tile{width:42px;height:42px;flex:none;border-radius:11px;display:flex;align-items:center;justify-content:center;}
+  /* E: lean row */
+  .lean{display:flex;flex-direction:column;gap:8px;}
+  .bar{height:6px;border-radius:3px;background:var(--track);position:relative;overflow:hidden;}
+  .bar i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--green);}
+  .row-lean{display:flex;align-items:center;gap:10px;}
+  .pct{font-weight:700;font-size:12.5px;min-width:44px;text-align:right;}
+  .note{font-size:11px;color:var(--fg3);margin-top:2px;}
+  .good{color:var(--green);} .warn{color:var(--amber);} .bad{color:var(--red);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- A ------------------------------------------------------------------ -->
+  <div class="variant">
+    <div class="vhead"><span class="vlabel">A · Charge ring</span>
+      <span class="vnote">leading element <em>is</em> the level; the row's thin bar disappears</span></div>
+    <div class="cards">
+      <div class="card sel">
+        <div class="ring">
+          <svg width="46" height="46" viewBox="0 0 46 46">
+            <circle cx="23" cy="23" r="19" fill="none" stroke="#303439" stroke-width="4"></circle>
+            <circle cx="23" cy="23" r="19" fill="none" stroke="#3ddc97" stroke-width="4"
+                    stroke-linecap="round" stroke-dasharray="104 119.4"></circle>
+          </svg>
+          <span class="num" style="color:#3ddc97">87</span>
+        </div>
+        <div class="main">
+          <div class="line1"><span class="name">G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO</span><span class="badge b-ls">Lightspeed</span></div>
+          <div class="line2"><span class="dot"></span><span class="status">Discharging</span><span class="kind">Mouse</span><span class="spacer"></span><span class="age">4025 mV · 7s ago</span><span class="snooze">Snooze</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="ring">
+          <svg width="46" height="46" viewBox="0 0 46 46">
+            <circle cx="23" cy="23" r="19" fill="none" stroke="#303439" stroke-width="4"></circle>
+          </svg>
+          <span class="num" style="color:#6c737c">—</span>
+        </div>
+        <div class="main">
+          <div class="line1"><span class="name">Logitech G733 Gaming Headset</span><span class="badge b-usb">USB</span></div>
+          <div class="line2"><span class="dot off"></span><span class="status off">Unavailable</span><span class="kind">Headset</span><span class="spacer"></span><span class="age">no HID++ answer</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- B ------------------------------------------------------------------ -->
+  <div class="variant">
+    <div class="vhead"><span class="vlabel">B · Battery glyph, proportionally filled <span class="good">← my recommendation</span></span>
+      <span class="vnote">the icon <em>is</em> a battery, so the shape carries the meaning</span></div>
+    <div class="cards">
+      <div class="card sel">
+        <div class="cell">
+          <svg width="54" height="26" viewBox="0 0 54 26">
+            <rect x="1" y="4" width="46" height="18" rx="5" fill="none" stroke="#6c737c" stroke-width="2"></rect>
+            <rect x="49" y="10" width="4" height="6" rx="2" fill="#6c737c"></rect>
+            <rect x="5" y="8" width="34" height="10" rx="2.5" fill="#3ddc97"></rect>
+          </svg>
+        </div>
+        <div class="main">
+          <div class="line1"><span class="name">G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO</span><span class="badge b-ls">Lightspeed</span></div>
+          <div class="line2"><span class="dot"></span><span class="status">Discharging</span><span class="kind">Mouse</span><span class="spacer"></span><span class="age">4025 mV · 7s ago</span><span class="snooze">Snooze</span></div>
+        </div>
+        <div class="pct">87%</div>
+      </div>
+      <div class="card">
+        <div class="cell">
+          <svg width="54" height="26" viewBox="0 0 54 26">
+            <rect x="1" y="4" width="46" height="18" rx="5" fill="none" stroke="#303439" stroke-width="2" stroke-dasharray="3 3"></rect>
+            <rect x="49" y="10" width="4" height="6" rx="2" fill="#303439"></rect>
+          </svg>
+        </div>
+        <div class="main">
+          <div class="line1"><span class="name">Logitech G733 Gaming Headset</span><span class="badge b-usb">USB</span></div>
+          <div class="line2"><span class="dot off"></span><span class="status off">Unavailable</span><span class="kind">Headset</span><span class="spacer"></span><span class="age">no HID++ answer</span></div>
+        </div>
+        <div class="pct" style="color:var(--fg3)">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- C ------------------------------------------------------------------ -->
+  <div class="variant">
+    <div class="vhead"><span class="vlabel">C · Device-kind glyph tile</span>
+      <span class="vnote">smallest change: same tile, real glyph instead of a letter</span></div>
+    <div class="cards">
+      <div class="card sel">
+        <div class="tile" style="background:#6aa8ff21;border:1px solid #6aa8ff42">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6aa8ff" stroke-width="1.7" stroke-linecap="round">
+            <rect x="7" y="2.5" width="10" height="19" rx="5"></rect><path d="M12 6.5v4"></path>
+          </svg>
+        </div>
+        <div class="main">
+          <div class="line1"><span class="name">G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO</span><span class="badge b-ls">Lightspeed</span></div>
+          <div class="line2"><span class="dot"></span><span class="status">Discharging</span><span class="kind">Mouse</span><span class="spacer"></span><span class="age">7s ago</span></div>
+          <div class="bar"><i style="width:87%"></i></div>
+        </div>
+        <div class="pct">87%</div>
+      </div>
+      <div class="card">
+        <div class="tile" style="background:#9ba1a921;border:1px solid #9ba1a942">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#9ba1a9" stroke-width="1.7" stroke-linecap="round">
+            <path d="M5 15v-3.5a7 7 0 0 1 14 0V15"></path><rect x="3" y="14.5" width="4.6" height="6" rx="2.2"></rect><rect x="16.4" y="14.5" width="4.6" height="6" rx="2.2"></rect>
+          </svg>
+        </div>
+        <div class="main">
+          <div class="line1"><span class="name">Logitech G733 Gaming Headset</span><span class="badge b-usb">USB</span></div>
+          <div class="line2"><span class="dot off"></span><span class="status off">Unavailable</span><span class="kind">Headset</span><span class="spacer"></span><span class="age">never</span></div>
+          <div class="bar"><i style="width:0;background:var(--fg3)"></i></div>
+        </div>
+        <div class="pct" style="color:var(--fg3)">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- D ------------------------------------------------------------------ -->
+  <div class="variant">
+    <div class="vhead"><span class="vlabel">D · Ring + kind glyph, percentage moves right</span>
+      <span class="vnote">most information in the smallest space — busiest of the four</span></div>
+    <div class="cards">
+      <div class="card sel">
+        <div class="ring">
+          <svg width="46" height="46" viewBox="0 0 46 46">
+            <circle cx="23" cy="23" r="19" fill="none" stroke="#303439" stroke-width="4"></circle>
+            <circle cx="23" cy="23" r="19" fill="none" stroke="#3ddc97" stroke-width="4"
+                    stroke-linecap="round" stroke-dasharray="104 119.4"></circle>
+          </svg>
+          <span class="num">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#e7e9ec" stroke-width="1.7" stroke-linecap="round">
+              <rect x="7" y="2.5" width="10" height="19" rx="5"></rect><path d="M12 6.5v4"></path>
+            </svg>
+          </span>
+        </div>
+        <div class="main">
+          <div class="line1"><span class="name">G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO</span><span class="badge b-ls">Lightspeed</span></div>
+          <div class="line2"><span class="dot"></span><span class="status">Discharging</span><span class="kind">Mouse</span><span class="spacer"></span><span class="age">7s ago</span></div>
+        </div>
+        <div class="pct good">87%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- E ------------------------------------------------------------------ -->
+  <div class="variant">
+    <div class="vhead"><span class="vlabel">E · No leading element at all</span>
+      <span class="vnote">GNOME power-panel style: text and a bar, zero decoration</span></div>
+    <div class="cards">
+      <div class="card sel" style="height:78px">
+        <div class="lean" style="flex:1">
+          <div class="row-lean">
+            <span class="name">G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO</span>
+            <span class="badge b-ls">Lightspeed</span><span class="spacer"></span><span class="pct good">87%</span>
+          </div>
+          <div class="bar"><i style="width:87%"></i></div>
+          <div class="line2"><span class="dot"></span><span class="status">Discharging</span><span class="kind">Mouse</span><span class="spacer"></span><span class="age">4025 mV · 7s ago</span><span class="snooze">Snooze</span></div>
+        </div>
+      </div>
+      <div class="card" style="height:78px">
+        <div class="lean" style="flex:1">
+          <div class="row-lean">
+            <span class="name">Logitech G733 Gaming Headset</span>
+            <span class="badge b-usb">USB</span><span class="spacer"></span><span class="pct" style="color:var(--fg3)">—</span>
+          </div>
+          <div class="bar"></div>
+          <div class="line2"><span class="dot off"></span><span class="status off">Unavailable</span><span class="kind">Headset</span><span class="spacer"></span><span class="snooze">Snooze</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
