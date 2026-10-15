@@ -90,6 +90,12 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Whether some device could not be read at all — the *Not answering* case, not a device that
+    /// answered and simply has no battery to report (there is nothing to wait for in that one).
+    pub fn incomplete(&self) -> bool {
+        self.devices.iter().any(|device| device.error.is_some())
+    }
+
     /// Build a snapshot from a discovery report, worst battery first.
     pub fn from_report(report: &DiscoveryReport, config: &Config) -> Self {
         let mut devices: Vec<DeviceView> = report
@@ -131,6 +137,90 @@ impl Snapshot {
         }
         lines.join("\n")
     }
+}
+
+/// One icon the tray should show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrayIcon {
+    /// The device this icon is about, by key; `None` when it follows the worst device.
+    pub key: Option<String>,
+    /// What the tooltip is titled with.
+    pub title: String,
+    /// What the tooltip says.
+    pub detail: String,
+    /// The level to draw — as the number itself, or as the colour of the battery glyph.
+    pub level: Option<u8>,
+}
+
+impl TrayIcon {
+    /// The id this icon registers as.
+    ///
+    /// `embr` for the icon that follows the worst device, `embr-<key>` for one about a particular
+    /// device. A bar that draws only the items it has pinned (Noctalia does) matches on exactly
+    /// this string, so it has to be stable and predictable rather than pretty.
+    pub fn id(&self) -> String {
+        match &self.key {
+            None => "embr".to_string(),
+            Some(key) => format!("embr-{}", id_safe(key)),
+        }
+    }
+}
+
+/// A device key in a shape a StatusNotifierItem id can carry: alphanumerics kept, everything else
+/// turned into a dash (serial numbers and `hidraw0` come through untouched, `0005:046D:B025` does
+/// not).
+fn id_safe(key: &str) -> String {
+    key.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Which tray icons the configuration asks for, and what each one says.
+///
+/// Nothing chosen means one icon that follows the worst device — the app's own face. Chosen devices
+/// each get an icon of their own, in the order they were chosen, like the separate readouts a
+/// monitoring overlay puts on screen.
+///
+/// A chosen device that has no reading, or is not attached at all, still gets its icon: an icon
+/// that came and went as a mouse went to sleep would be worse than one that says it has nothing to
+/// show, and the tooltip says which of the two it is.
+pub fn tray_icons(snapshot: &Snapshot, chosen: &[String]) -> Vec<TrayIcon> {
+    if chosen.is_empty() {
+        return vec![TrayIcon {
+            key: None,
+            title: "Embr".to_string(),
+            detail: snapshot.tray_tooltip(),
+            level: snapshot.lowest().and_then(|device| device.percent),
+        }];
+    }
+
+    chosen
+        .iter()
+        .map(|key| {
+            let device = snapshot.devices.iter().find(|device| device.key == *key);
+            match device {
+                Some(device) => TrayIcon {
+                    key: Some(key.clone()),
+                    title: device.name.clone(),
+                    detail: if device.percent.is_some() {
+                        format!(
+                            "{} — {} ({})",
+                            device.name, device.percent_text, device.status
+                        )
+                    } else {
+                        format!("{} — {}", device.name, device.status)
+                    },
+                    level: device.percent,
+                },
+                None => TrayIcon {
+                    key: Some(key.clone()),
+                    title: "Embr".to_string(),
+                    detail: "Not attached: this device is not here right now.".to_string(),
+                    level: None,
+                },
+            }
+        })
+        .collect()
 }
 
 /// Sort worst battery first; devices without a reading go last, by name.
@@ -189,6 +279,151 @@ mod tests {
 
     fn config() -> Config {
         Config::default()
+    }
+
+    fn report(devices: Vec<Device>) -> DiscoveryReport {
+        DiscoveryReport {
+            nodes_seen: devices.len(),
+            devices,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn with_nothing_chosen_the_icon_follows_the_worst_device() {
+        let snapshot = Snapshot::from_report(
+            &report(vec![
+                device("Mouse", Some((80, PercentSource::Device))),
+                device("Keyboard", Some((41, PercentSource::Device))),
+                device("Headset", None),
+            ]),
+            &config(),
+        );
+
+        let icons = tray_icons(&snapshot, &[]);
+        assert_eq!(
+            icons.len(),
+            1,
+            "the default is one icon, not one per device"
+        );
+        assert_eq!(
+            icons[0].id(),
+            "embr",
+            "the id that was pinnable before stays"
+        );
+        assert_eq!(
+            icons[0].level,
+            Some(41),
+            "it follows the worst battery, not the first row"
+        );
+        assert!(
+            icons[0].detail.contains("Keyboard"),
+            "and the tooltip still lists every device: {}",
+            icons[0].detail
+        );
+    }
+
+    #[test]
+    fn chosen_devices_each_get_an_icon_of_their_own_in_the_order_chosen() {
+        let snapshot = Snapshot::from_report(
+            &report(vec![
+                device("Mouse", Some((80, PercentSource::Device))),
+                device("Keyboard", Some((41, PercentSource::Device))),
+            ]),
+            &config(),
+        );
+
+        let chosen = vec!["keyboard".to_string(), "mouse".to_string()];
+        let icons = tray_icons(&snapshot, &chosen);
+        assert_eq!(icons.len(), 2, "one icon per chosen device");
+        assert_eq!(icons[0].id(), "embr-keyboard");
+        assert_eq!(icons[0].level, Some(41), "each icon shows its own device");
+        assert_eq!(icons[1].id(), "embr-mouse");
+        assert_eq!(icons[1].level, Some(80));
+        assert_eq!(
+            icons[1].title, "Mouse",
+            "the tooltip names the device the icon is about"
+        );
+    }
+
+    #[test]
+    fn a_chosen_device_that_has_gone_quiet_keeps_its_icon() {
+        let mut quiet = device("Headset", None);
+        quiet.error = Some("no reply after 4s".to_string());
+        let snapshot = Snapshot::from_report(&report(vec![quiet]), &config());
+
+        // One that is attached but saying nothing, and one that is not attached at all: both keep
+        // their icon, because an icon that comes and goes with a sleeping device is worse than one
+        // that says what it does not know.
+        let chosen = vec!["headset".to_string(), "ghost".to_string()];
+        let icons = tray_icons(&snapshot, &chosen);
+        assert_eq!(icons.len(), 2);
+        assert_eq!(icons[0].id(), "embr-headset");
+        assert_eq!(icons[0].level, None);
+        assert!(
+            icons[0].detail.contains("Headset") && icons[0].detail.contains("Connected"),
+            "it says the device is there: {}",
+            icons[0].detail
+        );
+        assert_eq!(icons[1].id(), "embr-ghost");
+        assert_eq!(icons[1].level, None);
+        assert!(
+            icons[1].detail.contains("Not attached"),
+            "and this one says it is not: {}",
+            icons[1].detail
+        );
+    }
+
+    #[test]
+    fn a_key_that_is_not_a_clean_identifier_still_gives_a_predictable_id() {
+        let icon = TrayIcon {
+            key: Some("0005:046D:B025".to_string()),
+            title: String::new(),
+            detail: String::new(),
+            level: None,
+        };
+        assert_eq!(
+            icon.id(),
+            "embr-0005-046D-B025",
+            "an id a bar can be asked to pin, whatever the kernel called the device"
+        );
+    }
+
+    #[test]
+    fn a_sweep_that_could_not_read_a_device_is_incomplete() {
+        let config = config();
+
+        // Nothing has been read yet, and nothing is missing.
+        assert!(!Snapshot::default().incomplete());
+
+        // A device that answered and has no battery to report is not something to wait for:
+        // asking it again in ten seconds would get the same answer.
+        assert!(
+            !Snapshot::from_report(&report(vec![device("Headset", None)]), &config).incomplete()
+        );
+
+        // A device that could not be read at all is exactly the one worth asking again.
+        let mut silent = device("Mouse", None);
+        silent.responded = false;
+        silent.error = Some("no reply after 4s".to_string());
+        let snapshot = Snapshot::from_report(&report(vec![silent]), &config);
+        assert!(snapshot.incomplete());
+        assert_eq!(
+            snapshot.devices[0].error.as_deref(),
+            Some("no reply after 4s")
+        );
+
+        // And one bad device among good ones is still an incomplete sweep.
+        let mut second_silent = device("Keyboard", Some((90, PercentSource::Device)));
+        second_silent.error = Some("no reply after 4s".to_string());
+        let mixed = Snapshot::from_report(
+            &report(vec![
+                device("Mouse", Some((80, PercentSource::Device))),
+                second_silent,
+            ]),
+            &config,
+        );
+        assert!(mixed.incomplete());
     }
 
     #[test]

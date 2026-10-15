@@ -15,10 +15,12 @@
 //! * [`battery`] — decoding battery state, plus our own voltage-to-percentage estimate.
 //! * [`receiver`] — the pairing table of a receiver (WPID, serial, name per slot).
 //! * [`discover`] — the one call an application needs: [`discover::discover`].
+//! * [`hotplug`] — [`hotplug::Uevents`]: the kernel saying that a HID device came or went.
 
 pub mod battery;
 pub mod decode;
 pub mod discover;
+pub mod hotplug;
 pub mod receiver;
 pub mod report;
 pub mod sysfs;
@@ -27,6 +29,7 @@ pub mod transport;
 pub use battery::{BatteryReading, ChargeStatus, Percent, PercentSource};
 pub use decode::BatterySource;
 pub use discover::{Connection, Device, DeviceKind, DiscoveryReport, discover};
+pub use hotplug::Uevents;
 pub use report::Feature;
 pub use transport::Channel;
 

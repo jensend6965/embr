@@ -17,9 +17,10 @@ use std::time::{Duration, Instant};
 use embr_hidpp::discover::{self, DiscoveryReport};
 
 pub use config::{Config, Notifications, default_path};
+pub use embr_hidpp::Uevents;
 pub use embr_hidpp::discover::Patience;
 pub use policy::{Alert, BatteryPolicy, PolicySettings};
-pub use view::{DeviceView, Snapshot, human_age};
+pub use view::{DeviceView, Snapshot, TrayIcon, human_age, tray_icons};
 
 /// What the window's close button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +65,32 @@ pub fn scheduled_interval(refresh_seconds: u64, window_open: bool) -> Duration {
     } else {
         wanted.max(HIDDEN_REFRESH_FLOOR_SECONDS)
     })
+}
+
+/// How long to wait before asking again after a sweep that could not read everything.
+///
+/// `attempts` is one-based: how many sweeps in a row have come back incomplete, so the first
+/// repeat is ten seconds after the sweep that failed — that is the number a person watching the
+/// window actually feels. It then doubles, because a device that is switched off must not be
+/// woken every few seconds for nothing: 10 s, 20 s, 40 s, 80 s, and by then the interval the user
+/// chose is in charge anyway.
+pub fn retry_interval(attempts: u32) -> Duration {
+    let step = attempts.saturating_sub(1).min(3);
+    Duration::from_secs(10 << step)
+}
+
+/// How long until the next sweep, given how the last one went.
+///
+/// With the window closed the floor stands whatever is missing: nobody is watching, and waking a
+/// sleeping device every ten seconds to redraw a tray tooltip spends its battery on nothing. A
+/// device that comes back while the window is closed is caught by [`Uevents`] instead, which
+/// costs nothing at all until something actually changes.
+pub fn next_sweep(refresh_seconds: u64, window_open: bool, missing_attempts: u32) -> Duration {
+    let normal = scheduled_interval(refresh_seconds, window_open);
+    if !window_open || missing_attempts == 0 {
+        return normal;
+    }
+    normal.min(retry_interval(missing_attempts))
 }
 
 /// Holds the configuration, the battery policy and the latest snapshot.
@@ -207,6 +234,13 @@ impl Monitor {
     /// Draw the worst battery as a number in the tray icon, or as the battery glyph.
     pub fn set_tray_shows_percent(&mut self, enabled: bool) -> Result<(), String> {
         self.config.ui.tray_shows_percent = enabled;
+        self.save_config()
+    }
+
+    /// Give one device a tray icon of its own, or take it away again. The choice is the user's, so
+    /// it survives a sweep that could not read the device and a restart of the app.
+    pub fn set_tray_device(&mut self, key: &str, on: bool) -> Result<(), String> {
+        self.config.set_tray_device(key, on);
         self.save_config()
     }
 
@@ -392,6 +426,46 @@ mod tests {
             scheduled_interval(1, true),
             Duration::from_secs(MIN_REFRESH_SECONDS),
             "and never faster than a sweep can be"
+        );
+    }
+
+    #[test]
+    fn a_sweep_that_could_not_read_something_is_repeated_sooner() {
+        assert_eq!(
+            next_sweep(60, true, 0),
+            Duration::from_secs(60),
+            "nothing missing: the interval the user chose"
+        );
+        assert_eq!(
+            next_sweep(60, true, 1),
+            Duration::from_secs(10),
+            "a device that is not answering is asked again while the user is watching"
+        );
+        assert_eq!(
+            retry_interval(2),
+            Duration::from_secs(20),
+            "and then less often, so a device that is switched off is not woken for nothing"
+        );
+        assert_eq!(
+            next_sweep(600, true, 99),
+            Duration::from_secs(80),
+            "the retry backs off no further than 80 s, however long the user's interval is"
+        );
+        assert_eq!(
+            next_sweep(60, true, 99),
+            Duration::from_secs(60),
+            "and once the backoff passes the user's own interval, that interval is what happens"
+        );
+        assert_eq!(
+            next_sweep(30, true, 99),
+            Duration::from_secs(30),
+            "and it never scans less often than the user asked for"
+        );
+        assert_eq!(
+            next_sweep(60, false, 3),
+            Duration::from_secs(HIDDEN_REFRESH_FLOOR_SECONDS),
+            "with the window closed nothing is woken to update a tooltip: the floor stands, and a \
+             device that really comes back is caught by its uevent instead"
         );
     }
 

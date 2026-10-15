@@ -78,6 +78,9 @@ pub struct Ui {
     pub mark_estimates: bool,
     /// Draw the worst battery as a number in the tray icon instead of the battery glyph.
     pub tray_shows_percent: bool,
+    /// The devices that get a tray icon of their own, by device key, in the order chosen. Empty —
+    /// the default — means one icon that follows the device with the least charge.
+    pub tray_devices: Vec<String>,
 }
 
 impl Default for Ui {
@@ -87,6 +90,24 @@ impl Default for Ui {
             show_voltage: true,
             mark_estimates: true,
             tray_shows_percent: false,
+            tray_devices: Vec::new(),
+        }
+    }
+}
+
+impl Config {
+    /// Give one device a tray icon of its own, or take it away again.
+    ///
+    /// The order the devices were chosen in is the order their icons stand in, and asking twice
+    /// for the same device does not give it two icons. Devices that are not attached right now can
+    /// still be chosen: the choice is the user's, not the sweep's.
+    pub fn set_tray_device(&mut self, key: &str, on: bool) {
+        if on {
+            if !self.ui.tray_devices.iter().any(|chosen| chosen == key) {
+                self.ui.tray_devices.push(key.to_string());
+            }
+        } else {
+            self.ui.tray_devices.retain(|chosen| chosen != key);
         }
     }
 }
@@ -333,13 +354,43 @@ mod tests {
             .per_device
             .insert("G733-0123".to_string(), 35);
         config.ui.tray_shows_percent = true;
+        config
+            .ui
+            .tray_devices
+            .extend(["G733-0123".to_string(), "hidraw8".to_string()]);
         save(&config, &path).unwrap();
 
         let (loaded, problems) = load(&path);
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(loaded.notifications.per_device.get("G733-0123"), Some(&35));
         assert!(loaded.ui.tray_shows_percent);
+        assert_eq!(
+            loaded.ui.tray_devices,
+            vec!["G733-0123".to_string(), "hidraw8".to_string()],
+            "the order the icons were chosen in is part of the choice"
+        );
         assert_eq!(loaded, config);
+    }
+
+    #[test]
+    fn choosing_a_device_for_the_tray_keeps_the_order_and_does_not_double_it() {
+        let mut config = Config::default();
+        config.set_tray_device("hidraw7", true);
+        config.set_tray_device("hidraw8", true);
+        config.set_tray_device("hidraw7", true); // asked for twice: still one icon
+        assert_eq!(
+            config.ui.tray_devices,
+            vec!["hidraw7".to_string(), "hidraw8".to_string()],
+            "the order they were chosen in is the order they are drawn in"
+        );
+
+        config.set_tray_device("hidraw7", false);
+        assert_eq!(config.ui.tray_devices, vec!["hidraw8".to_string()]);
+        config.set_tray_device("hidraw8", false);
+        assert!(
+            config.ui.tray_devices.is_empty(),
+            "nothing chosen is the default: one icon following the worst device"
+        );
     }
 
     #[test]
