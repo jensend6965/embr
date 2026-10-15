@@ -25,6 +25,9 @@ pub struct Channel {
     path: PathBuf,
     file: File,
     software_id: u8,
+    /// Whether to address this node with long reports. Set from the first timeout rather than
+    /// from a protocol version we would have to ask for, so one channel keeps one answer.
+    prefer_long: bool,
 }
 
 impl Channel {
@@ -35,7 +38,8 @@ impl Channel {
         Ok(Self {
             path,
             file,
-            software_id: 0x1,
+            software_id: 0x8,
+            prefer_long: true,
         })
     }
 
@@ -43,17 +47,31 @@ impl Channel {
         &self.path
     }
 
-    /// Rotate through `1..=7`. Kept below 8 so a reply can never be confused with a
-    /// notification, and rotated per call so a late reply to an identical previous request
-    /// cannot be matched to this one.
+    /// Rotate through `0x8..=0xF`.
+    ///
+    /// HID++ 2.0 wants bit 3 set in the software id so that a reply cannot be mistaken for a
+    /// notification; the reference implementation sends one fixed id in that range, this crate
+    /// rotates within it so a late reply to an identical earlier request cannot be matched to
+    /// the one we just sent.
     fn next_software_id(&mut self) -> u8 {
         let id = self.software_id;
-        self.software_id = if self.software_id >= 7 {
-            1
+        self.software_id = if self.software_id >= 0xF {
+            0x8
         } else {
             self.software_id + 1
         };
         id
+    }
+
+    /// Send a hand-built frame and return whatever the node answers with, ignoring matching.
+    ///
+    /// Diagnostics only: a device that answers nothing to [`Self::call_feature`] needs to be
+    /// asked with a different report size or software id, which the matching path does not
+    /// expose.
+    pub fn call_raw(&mut self, frame: &[u8], timeout: Duration) -> Result<Vec<u8>> {
+        self.send(frame)?;
+        let deadline = Instant::now() + timeout;
+        self.receive(deadline, timeout)
     }
 
     /// Call a HID++ 2.0 feature function and return the decoded reply.
@@ -67,7 +85,24 @@ impl Channel {
     ) -> Result<FeatureReply> {
         let mut call = FeatureCall::new(device, feature_index, function, params);
         call.software_id = self.next_software_id();
-        let frame: Vec<u8> = if params.len() > 3 {
+        // Which request size a device answers is a property of the device, not of how much we
+        // are sending: the reference implementation picks it from the protocol version, and a
+        // 2-byte ROOT lookup sent short is simply ignored — the G733 headset on this machine
+        // answers long requests in 2 ms and never answers a short one. A device that only
+        // answers short reports costs one timeout to discover, and the answer is remembered.
+        let long = self.prefer_long && params.len() <= LONG_LEN - 4;
+        match self.exchange(&call, long, timeout) {
+            Err(Error::Timeout { .. }) if long => {
+                self.prefer_long = false;
+                self.exchange(&call, false, timeout)
+            }
+            other => other,
+        }
+    }
+
+    /// Send one request frame and wait for the reply that belongs to it.
+    fn exchange(&mut self, call: &FeatureCall, long: bool, timeout: Duration) -> Result<FeatureReply> {
+        let frame: Vec<u8> = if long {
             call.to_long().to_vec()
         } else {
             call.to_short().to_vec()
@@ -84,7 +119,9 @@ impl Channel {
                     let Some(parsed) = FeatureReply::parse(&reply) else {
                         continue;
                     };
-                    if parsed.feature_index != feature_index || parsed.function != function {
+                    if parsed.feature_index != call.feature_index
+                        || parsed.function != call.function
+                    {
                         continue;
                     }
                     if parsed.software_id == call.software_id {
