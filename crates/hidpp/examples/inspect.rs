@@ -44,7 +44,10 @@ fn main() {
 /// other: this crate rotated 1..=7 while the reference implementation uses a single fixed id
 /// with bit 3 set, and a device that ignores the low ids looks completely silent.
 fn raw_reports(channel: &mut Channel) {
-    println!("\nraw ROOT.getFeature({:#06X}) — same request, different report sizes and software ids:", Feature::AdcMeasurement.id());
+    println!(
+        "\nraw ROOT.getFeature({:#06X}) — same request, different report sizes and software ids:",
+        Feature::AdcMeasurement.id()
+    );
     for software_id in [0x01u8, 0x08, 0x0B] {
         let mut call = FeatureCall::new(
             DEVICE_SELF,
@@ -100,7 +103,12 @@ fn feature_set(channel: &mut Channel) {
     let count = channel
         .call_feature(DEVICE_SELF, 0x01, 0x00, &[], Duration::from_millis(3000))
         .ok()
-        .and_then(|reply| reply.payload_or_error().ok().and_then(|p| p.first().copied()))
+        .and_then(|reply| {
+            reply
+                .payload_or_error()
+                .ok()
+                .and_then(|p| p.first().copied())
+        })
         .unwrap_or(0);
     println!("  device reports {count} feature(s)");
     for index in 0..count {
@@ -148,10 +156,19 @@ fn battery_features(channel: &mut Channel) {
                 Duration::from_millis(3000),
             )
             .ok()
-            .and_then(|reply| reply.payload_or_error().ok().and_then(|p| p.first().copied()))
+            .and_then(|reply| {
+                reply
+                    .payload_or_error()
+                    .ok()
+                    .and_then(|p| p.first().copied())
+            })
             .filter(|index| *index != 0);
         let Some(index) = index else {
-            println!("  {:<22} {:#06X}  not supported", feature.name(), feature.id());
+            println!(
+                "  {:<22} {:#06X}  not supported",
+                feature.name(),
+                feature.id()
+            );
             continue;
         };
         println!(
@@ -161,13 +178,8 @@ fn battery_features(channel: &mut Channel) {
         );
         for attempt in 1..=3 {
             let started = Instant::now();
-            let result = channel.call_feature(
-                DEVICE_SELF,
-                index,
-                0x00,
-                &[],
-                Duration::from_millis(3000),
-            );
+            let result =
+                channel.call_feature(DEVICE_SELF, index, 0x00, &[], Duration::from_millis(3000));
             match result {
                 Ok(reply) => match reply.error_code() {
                     Some(code) => println!(

@@ -79,22 +79,29 @@ clock. Nothing in `core` or `hidpp` imports a UI toolkit.
    `0x81B5` earns a HID++ 1.0 error and nothing else.
 2. Register reads go out as **short** 7-byte reports even for registers above `0xFF`; these
    receivers do not answer a long-form register read.
-3. A device paired to a receiver answers under **its slot index (0x01…) even when the
+3. **Feature calls go out as long 20-byte reports, always** — the size is a property of the
+   device (HID++ 2.0 and up), not of the payload. Sending a 2-byte ROOT lookup short cost us
+   the whole G733 headset: it answers in 2 ms as a long report and never answers short, at any
+   timeout or software id.
+4. A device paired to a receiver answers under **its slot index (0x01…) even when the
    request goes to the device's own hidraw node**, so a matcher that only accepts `0xFF`
    discards every reply.
-4. Replies must be matched on feature **and** function **and** a rotating software id, with
-   a drained socket: the receiver's wireless round trip can exceed a second, and a late
-   reply otherwise matches the *next* request and produces plausible-but-wrong numbers.
-5. `DEVICE NAME {0005}` is three functions: 0 = name length, 1 = a 16-byte name fragment at
+5. Replies must be matched on feature **and** function **and** a rotating software id (with
+   bit 3 set, `0x8..=0xF`, so a reply cannot be mistaken for a notification), with a drained
+   socket: the receiver's wireless round trip can exceed a second, and a late reply otherwise
+   matches the *next* request and produces plausible-but-wrong numbers.
+6. `DEVICE NAME {0005}` is three functions: 0 = name length, 1 = a 16-byte name fragment at
    a byte offset (a 59-character name takes four calls), 2 = the device-type byte. That byte
    is authoritative; guessing "Mouse" from the product string gets `G703 LS` wrong.
-6. Most Logitech devices expose only `BATTERY_VOLTAGE {1001}`; a percentage has to be
-   inferred. **Our curve** (`crates/hidpp/src/battery.rs`, `VOLTAGE_CURVE`) is our own,
-   monotone, documented and replaceable, and every inferred value is marked `~`. It reads
-   about 1 % above what Solaar's different table shows for the same voltage — the millivolts
-   are always displayed next to it, and the device's own percentage wins whenever it
-   reports one.
-7. A receiver presents three hidraw nodes and only the HID++ interface answers; the other
+7. Most Logitech devices expose only `BATTERY_VOLTAGE {1001}` and a percentage has to be
+   inferred; **headsets use `ADC_MEASUREMENT {1F20}` instead** (same `millivolts flags` shape,
+   different flag bits: bit 0 = a battery exists, bit 1 = charging), and that call errors while
+   the headset is idle rather than staying silent. `crates/hidpp/src/battery.rs`
+   (`VOLTAGE_CURVE`) holds the reference curve, so our inferred percentage agrees with what
+   `solaar show` prints for the same voltage — 4020 mV is 84 %, 3867 mV is 61 % — and it rounds
+   to nearest rather than truncating. Every inferred value still carries `~`, and a device's own
+   percentage always wins.
+8. A receiver presents three hidraw nodes and only the HID++ interface answers; the other
    two fail with `EPIPE`. Group them by USB port and talk to the interface with the highest
    index.
 
@@ -103,16 +110,18 @@ clock. Nothing in `core` or `hidpp` imports a UI toolkit.
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH          # rustup installed with --no-modify-path
 cd ~/Projects/logi-modern
-cargo test --workspace                      # 56 tests, no hardware needed
+cargo test --workspace                      # 58 tests, no hardware needed
 cargo clippy --workspace --all-targets      # must stay at zero warnings
 cargo run --release -p periphery            # the app (window, tray, notifications)
 cargo run --release --example probe -p hidpp # headless device report — the acceptance check
+cargo run --example inspect -p hidpp -- /dev/hidraw0   # why is one node silent? ask it
 /usr/bin/solaar show                        # ground truth to compare the probe against
 ```
 
-* **Acceptance ritual**: `probe` output must agree with `solaar show` for level and millivolts
-  on the G703 and G913 TKL. Percentages may differ by ~1 % because the curve is ours; the
-  millivolts must not differ.
+* **Acceptance ritual**: `probe` output must agree with `solaar show` on level *and*
+  millivolts for every device it reads — including the headset, which reports 3867 mV through
+  ADC to both tools. The millivolts must never differ; the percentage must not either, now that
+  the curve is the reference one.
 * **Tests are the point, not a formality**: the battery policy's subtleties (hysteresis,
   once-per-crossing, rate limiting, snooze, no replay when notifications were off) all have
   tests with an injected clock. Add behaviour there, not in the Slint glue.
@@ -131,8 +140,10 @@ cargo run --release --example probe -p hidpp # headless device report — the ac
   OSD with the button is photographed, but this session has no input injection. Unproven.
 * The **tray icon needs pinning** in Noctalia (`[widget.tray] pinned` in
   `~/.config/noctalia-kwe/noctalia-config.toml`); no id is faked to get around it.
-* The **G733 headset** exposes no readable battery on this firmware; the app says
-  "Unavailable".
+* The **G733 headset** reads 61 %/3866 mV through `ADC_MEASUREMENT {1F20}` while it is in use;
+  while it is idle the call errors (`0x05 NOT_ALLOWED`) and the app says "Connected" with no
+  reading, which is the honest answer rather than a stale number. A periodic retry for idle
+  headsets is not implemented yet.
 * No packaging yet (`.desktop`, systemd user unit, udev rule installation), no i18n, and the
   app is a single process — a background daemon so notifications work with the UI closed is
   still a future step (the `core`/`hidpp` split is already shaped for it).

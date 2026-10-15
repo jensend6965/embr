@@ -101,7 +101,12 @@ impl Channel {
     }
 
     /// Send one request frame and wait for the reply that belongs to it.
-    fn exchange(&mut self, call: &FeatureCall, long: bool, timeout: Duration) -> Result<FeatureReply> {
+    fn exchange(
+        &mut self,
+        call: &FeatureCall,
+        long: bool,
+        timeout: Duration,
+    ) -> Result<FeatureReply> {
         let frame: Vec<u8> = if long {
             call.to_long().to_vec()
         } else {

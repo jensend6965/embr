@@ -267,8 +267,12 @@ pub fn discover() -> DiscoveryReport {
                 // the full device timeout for something that never answers is what turns a
                 // refresh into a twenty-second stall, and a device that cannot answer in under
                 // a second is asleep, not slow.
-                match feature_index(&mut channel, DEVICE_SELF, Feature::Root, DIRECT_PING_TIMEOUT)
-                {
+                match feature_index(
+                    &mut channel,
+                    DEVICE_SELF,
+                    Feature::Root,
+                    DIRECT_PING_TIMEOUT,
+                ) {
                     Ok(_) => {
                         device.responded = true;
                         match read_battery(&mut channel, DEVICE_SELF, DEVICE_TIMEOUT) {
