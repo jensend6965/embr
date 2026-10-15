@@ -1,5 +1,7 @@
 # Embr
 
+[![ci](https://github.com/jensend6965/embr/actions/workflows/ci.yml/badge.svg)](https://github.com/jensend6965/embr/actions/workflows/ci.yml)
+
 A Logitech device monitor for Linux. It shows what every attached Logitech mouse, keyboard and
 headset is doing — charge, voltage, charge state, connection — in a small native window, a tray
 icon and opt-in desktop notifications.
