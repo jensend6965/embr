@@ -28,6 +28,11 @@ pub struct DeviceView {
     pub charging: bool,
     /// The device itself reports a broken or overheated battery.
     pub faulty: bool,
+    /// The alert level the user set for this device alone, if any. It replaces the shared
+    /// thresholds for this device.
+    pub alert_below: Option<u8>,
+    /// The level this device's alert actually uses: its own, or the highest shared one.
+    pub alert_below_effective: u8,
     /// Why there is no reading.
     pub error: Option<String>,
     /// When the reading was taken.
@@ -40,6 +45,7 @@ impl DeviceView {
         let percent = reading.and_then(|b| b.percent);
         let estimated = percent.is_some_and(|p| p.is_estimate());
         let mark_estimates = config.ui.mark_estimates;
+        let alert_below = config.notifications.per_device.get(&device.key).copied();
         Self {
             key: device.key.clone(),
             name: device.name.clone(),
@@ -56,6 +62,12 @@ impl DeviceView {
             status: device.status_label().to_string(),
             charging: reading.is_some_and(|b| b.charging()),
             faulty: reading.is_some_and(|b| b.status.faulty()),
+            alert_below,
+            // A level for a device that is not in the config yet, or a config with no
+            // thresholds at all, still has to show something a spin box can hold.
+            alert_below_effective: alert_below
+                .or_else(|| config.notifications.thresholds.first().copied())
+                .unwrap_or(20),
             error: device.error.clone(),
             captured: reading.map(|b| b.captured),
         }
@@ -99,26 +111,6 @@ impl Snapshot {
             .iter()
             .filter(|d| d.percent.is_some())
             .min_by_key(|d| d.percent)
-    }
-
-    /// A one-line summary for a tooltip or a window header.
-    pub fn headline(&self) -> String {
-        let total = self.devices.len();
-        if total == 0 {
-            return "No Logitech devices found".to_string();
-        }
-        match self.lowest() {
-            Some(lowest) => format!(
-                "{total} device{} · lowest {} ({})",
-                if total == 1 { "" } else { "s" },
-                lowest.percent_text,
-                lowest.name
-            ),
-            None => format!(
-                "{total} device{} · no battery readings",
-                if total == 1 { "" } else { "s" }
-            ),
-        }
     }
 
     /// The tooltip for a tray icon: every device with a level, one per line.
@@ -246,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn the_headline_and_tooltip_are_useful_at_a_glance() {
+    fn the_tooltip_lists_every_device_and_says_when_there_is_no_reading() {
         let report = DiscoveryReport {
             devices: vec![
                 device("G703 LIGHTSPEED", Some((88, PercentSource::Estimated))),
@@ -256,10 +248,6 @@ mod tests {
             nodes_seen: 9,
         };
         let snapshot = Snapshot::from_report(&report, &config());
-        assert_eq!(
-            snapshot.headline(),
-            "2 devices · lowest ~88% (G703 LIGHTSPEED)"
-        );
         let tooltip = snapshot.tray_tooltip();
         assert!(tooltip.starts_with("Logitech devices"), "{tooltip}");
         assert!(
@@ -273,9 +261,42 @@ mod tests {
     }
 
     #[test]
+    fn the_lowest_device_is_the_one_the_tray_icon_reports() {
+        let report = DiscoveryReport {
+            devices: vec![
+                device("Full", Some((90, PercentSource::Device))),
+                device("Low", Some((7, PercentSource::Estimated))),
+                device("Unknown", None),
+            ],
+            warnings: vec![],
+            nodes_seen: 3,
+        };
+        let snapshot = Snapshot::from_report(&report, &config());
+        let lowest = snapshot.lowest().expect("one device has a level");
+        assert_eq!(lowest.name, "Low");
+        assert_eq!(lowest.percent, Some(7));
+    }
+
+    #[test]
+    fn a_devices_own_alert_level_is_carried_into_the_view() {
+        let mut config = config();
+        config.notifications.per_device.insert("a".to_string(), 35);
+        let own = DeviceView::from_device(&device("A", Some((80, PercentSource::Device))), &config);
+        assert_eq!(own.alert_below, Some(35));
+        assert_eq!(own.alert_below_effective, 35);
+
+        let shared =
+            DeviceView::from_device(&device("B", Some((80, PercentSource::Device))), &config);
+        assert_eq!(shared.alert_below, None);
+        assert_eq!(
+            shared.alert_below_effective, 20,
+            "without a level of its own, the highest shared threshold is what the row shows"
+        );
+    }
+
+    #[test]
     fn an_empty_snapshot_says_so_instead_of_showing_zero_devices() {
         let snapshot = Snapshot::default();
-        assert_eq!(snapshot.headline(), "No Logitech devices found");
         assert_eq!(snapshot.tray_tooltip(), "No Logitech devices found");
         assert!(snapshot.lowest().is_none());
     }

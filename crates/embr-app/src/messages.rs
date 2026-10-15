@@ -18,6 +18,10 @@ pub enum Command {
     Snooze(String),
     /// Turn battery notifications on or off and remember the choice.
     SetNotifications(bool),
+    /// Give one device its own alert level, or (`None`) put it back on the shared thresholds.
+    SetDeviceAlertLevel { key: String, level: Option<u8> },
+    /// Draw the worst battery as a number in the tray icon, or as the battery glyph.
+    SetTrayPercent(bool),
 }
 
 /// The device thread, the notification thread or the tray → the UI thread.
@@ -33,15 +37,16 @@ pub enum UiRequest {
 
 /// Everything the window needs to draw one refresh, plus the settings that came with it.
 ///
-/// The device list, the headline and the ages are `core`'s own view model and text — the UI
-/// only unpacks them. The four settings fields are configuration *presentation*: `core`
-/// stores thresholds as a list of numbers and this is the list as a sentence.
+/// The device list and the ages are `core`'s own view model and text — the UI only unpacks
+/// them. The settings fields are configuration *presentation*: `core` stores thresholds as a
+/// list of numbers and this is the list as a sentence.
 #[derive(Debug, Clone)]
 pub struct UiState {
     pub snapshot: Snapshot,
     pub notifications_enabled: bool,
     pub thresholds_text: String,
     pub refresh_seconds: u64,
+    pub tray_shows_percent: bool,
     pub notice: Option<String>,
 }
 

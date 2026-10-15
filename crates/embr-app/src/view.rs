@@ -24,6 +24,8 @@ pub fn nothing() -> Device {
         status: "".into(),
         attention: false,
         updated: "never".into(),
+        alert_below: 20,
+        alert_below_custom: false,
         error: "".into(),
     }
 }
@@ -41,6 +43,8 @@ pub fn device(view: &DeviceView) -> Device {
         status: view.status.clone().into(),
         attention: view.needs_attention(),
         updated: age(view).into(),
+        alert_below: i32::from(view.alert_below_effective),
+        alert_below_custom: view.alert_below.is_some(),
         error: view.error.clone().unwrap_or_default().into(),
     }
 }

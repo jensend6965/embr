@@ -116,13 +116,53 @@ impl DeviceWorker {
                         }
                         settings_changed = true;
                     }
+                    Command::SetDeviceAlertLevel { key, level } => {
+                        match self.monitor.set_device_alert_level(&key, level) {
+                            Ok(()) => eprintln!(
+                                "[devices] {} now alerts at {}",
+                                self.name_of(&key),
+                                match level {
+                                    Some(level) => format!("{level}%"),
+                                    None => "the shared thresholds".to_string(),
+                                }
+                            ),
+                            Err(problem) => eprintln!(
+                                "[devices] the level was applied but not saved: {problem}"
+                            ),
+                        }
+                        settings_changed = true;
+                        // A level chosen for a device that is *already* below it has to be
+                        // measured against a fresh reading: the policy only speaks when it
+                        // observes, and waiting for the next scheduled sweep would leave the
+                        // user wondering whether the setting did anything at all.
+                        refresh = true;
+                    }
+                    Command::SetTrayPercent(enabled) => {
+                        match self.monitor.set_tray_shows_percent(enabled) {
+                            Ok(()) => eprintln!(
+                                "[devices] the tray icon shows {}",
+                                if enabled {
+                                    "the lowest percentage"
+                                } else {
+                                    "a battery"
+                                }
+                            ),
+                            Err(problem) => eprintln!(
+                                "[devices] the choice was applied but not saved: {problem}"
+                            ),
+                        }
+                        settings_changed = true;
+                    }
                 }
             }
 
             if refresh {
                 self.sweep();
             } else if settings_changed {
+                // A settings change reaches the window and the tray now, from the readings
+                // already in hand: a sweep would take seconds and change nothing.
                 self.publish();
+                self.update_tray();
             }
         }
         eprintln!("[devices] the device thread is stopping");
@@ -182,6 +222,7 @@ impl DeviceWorker {
             notifications_enabled: config.notifications.enabled,
             thresholds_text: thresholds_text(&config.notifications.thresholds),
             refresh_seconds: config.general.refresh_seconds.max(MIN_REFRESH_SECONDS),
+            tray_shows_percent: config.ui.tray_shows_percent,
             notice: self.monitor.notices.first().cloned(),
         };
         if self.states.send(state).is_err() {
@@ -192,7 +233,8 @@ impl DeviceWorker {
     fn update_tray(&self) {
         let Some(tray) = &self.tray else { return };
         let snapshot = self.monitor.snapshot();
-        tray.update(|item| item.observe(snapshot));
+        let shows_percent = self.monitor.config().ui.tray_shows_percent;
+        tray.update(|item| item.observe(snapshot, shows_percent));
     }
 
     fn name_of(&self, key: &str) -> String {

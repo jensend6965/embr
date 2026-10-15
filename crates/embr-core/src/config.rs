@@ -39,8 +39,11 @@ impl Default for General {
 pub struct Notifications {
     /// Off until the user asks for it.
     pub enabled: bool,
-    /// Percentages worth reporting, highest first.
+    /// Percentages worth reporting, highest first. The default for every device.
     pub thresholds: Vec<u8>,
+    /// One level per device, keyed by the device's stable key. A device listed here watches
+    /// its own level instead of `thresholds`.
+    pub per_device: BTreeMap<String, u8>,
     /// How far the level must rise above a threshold before it can fire again.
     pub hysteresis_percent: u8,
     /// At most one notification per this many seconds, across all devices.
@@ -54,6 +57,7 @@ impl Default for Notifications {
         Self {
             enabled: false,
             thresholds: vec![20, 10],
+            per_device: BTreeMap::new(),
             hysteresis_percent: 5,
             rate_limit_seconds: 60,
             snooze_minutes: 30,
@@ -70,6 +74,8 @@ pub struct Ui {
     pub show_voltage: bool,
     /// Mark percentages we inferred from voltage as approximate.
     pub mark_estimates: bool,
+    /// Draw the worst battery as a number in the tray icon instead of the battery glyph.
+    pub tray_shows_percent: bool,
 }
 
 impl Default for Ui {
@@ -78,6 +84,7 @@ impl Default for Ui {
             theme: "dark".to_string(),
             show_voltage: true,
             mark_estimates: true,
+            tray_shows_percent: false,
         }
     }
 }
@@ -118,6 +125,11 @@ impl Config {
         if self.notifications.thresholds.is_empty() {
             self.notifications.thresholds = Notifications::default().thresholds;
         }
+        // A per-device level is a percentage like any other. A level outside 1–99, or an entry
+        // with no device key, is dropped so that device simply falls back to the defaults.
+        self.notifications
+            .per_device
+            .retain(|key, level| !key.trim().is_empty() && (1..=99).contains(&*level));
         if self.notifications.hysteresis_percent > 50 {
             self.notifications.hysteresis_percent = 50;
         }
@@ -290,5 +302,51 @@ mod tests {
         config.notifications.thresholds = vec![];
         config.sanitise();
         assert_eq!(config.notifications.thresholds, vec![20, 10]);
+    }
+
+    #[test]
+    fn a_per_device_level_survives_a_save_and_a_reload() {
+        let path = scratch("per-device");
+        let mut config = Config::default();
+        config.notifications.enabled = true;
+        config
+            .notifications
+            .per_device
+            .insert("G733-0123".to_string(), 35);
+        config.ui.tray_shows_percent = true;
+        save(&config, &path).unwrap();
+
+        let (loaded, problems) = load(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded.notifications.per_device.get("G733-0123"), Some(&35));
+        assert!(loaded.ui.tray_shows_percent);
+        assert_eq!(loaded, config);
+    }
+
+    #[test]
+    fn an_unusable_per_device_level_is_dropped_rather_than_clamped() {
+        let mut config = Config::default();
+        config
+            .notifications
+            .per_device
+            .insert("mouse".to_string(), 30);
+        config
+            .notifications
+            .per_device
+            .insert("zero".to_string(), 0);
+        config
+            .notifications
+            .per_device
+            .insert("over".to_string(), 150);
+        config
+            .notifications
+            .per_device
+            .insert("   ".to_string(), 40);
+        config.sanitise();
+        assert_eq!(
+            config.notifications.per_device,
+            BTreeMap::from([("mouse".to_string(), 30)]),
+            "only the usable level is kept: the rest fall back to the defaults"
+        );
     }
 }

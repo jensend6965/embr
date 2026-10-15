@@ -2,10 +2,10 @@
 //
 // The look is the one the spike settled on: dark palette tokens, rounded cards, stat tiles,
 // real std-widgets, battery bars. This file draws and raises callbacks; it decides nothing.
-// Every string that needs judgement (headlines, ages, percentages with their `~`) is
-// computed in Rust by `core` and handed in as a property.
+// Every string that needs judgement (ages, percentages with their `~`, the thresholds as a
+// sentence) is computed in Rust by `core` and handed in as a property.
 
-import { Palette, ScrollView, Switch, Button, AboutSlint } from "std-widgets.slint";
+import { Palette, ScrollView, SpinBox, Switch, Button, AboutSlint } from "std-widgets.slint";
 
 export struct Device {
     key: string,
@@ -21,6 +21,10 @@ export struct Device {
     status: string,
     attention: bool,
     updated: string,
+    /// The level this device alerts at: its own, or the highest shared threshold.
+    alert-below: int,
+    /// True when that level is one the user set for this device alone.
+    alert-below-custom: bool,
     error: string,
 }
 
@@ -455,17 +459,83 @@ component SettingRow inherits Rectangle {
     }
 }
 
+/// The alert level of the selected device: the one setting in this window that is about one
+/// device rather than the application, so it is edited here and its state says whose it is.
+component AlertLevelRow inherits Rectangle {
+    in property <string> default-text;
+    in property <bool> custom: false;
+    in-out property <int> level: 20;
+    callback leveled(int);
+    callback cleared();
+
+    height: 44px;
+    border-radius: 10px;
+    background: Tokens.surface-raised;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 1px;
+            alignment: center;
+
+            Text {
+                text: "Low battery alert";
+                font-size: 13px;
+                color: Tokens.text-primary;
+            }
+
+            // Whose level this is, in the row itself: a setting that belongs to one device is
+            // otherwise indistinguishable from the shared ones below it.
+            Text {
+                text: root.custom ? "set for this device" : root.default-text;
+                font-size: 10px;
+                color: root.custom ? Tokens.accent : Tokens.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        SpinBox {
+            width: 116px;
+            height: 28px;
+            minimum: 5;
+            maximum: 95;
+            step-size: 5;
+            value <=> root.level;
+            edited(v) => { root.leveled(v); }
+        }
+
+        Button {
+            text: "Default";
+            width: 78px;
+            height: 28px;
+            // Nothing to go back to when this device is already on the shared thresholds.
+            enabled: root.custom;
+            clicked => { root.cleared(); }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "Embr — Logitech devices";
+    // Noto Sans is what `sans-serif` resolves to on the major distributions, so the window looks
+    // native wherever it runs and needs no font shipping. If a system does not have it, Slint
+    // falls back to that system's own default.
+    default-font-family: "Noto Sans";
+    icon: @image-url("../../../assets/embr.svg");
     width: 1000px;
-    height: 640px;
+    // Tall enough for the detail card and every settings row, with slack: a `Window` with a
+    // fixed height clips whatever does not fit and says nothing about it.
+    height: 660px;
     background: Tokens.bg;
 
     in property <[Device]> devices;
     in-out property <Device> selected;
     in property <bool> has-devices: false;
-    in property <string> headline: "";
-    in property <string> last-updated: "";
     in property <string> last-updated-label: "";
     in property <bool> refreshing: false;
     in-out property <bool> notifications-enabled: false;
@@ -474,12 +544,19 @@ export component AppWindow inherits Window {
     in property <int> refresh-seconds: 60;
     in property <string> notice: "";
     in-out property <int> selected-index: -1;
+    /// The selected device's alert level, and whether it is one the user set for it.
+    in-out property <int> alert-level: 20;
+    in property <bool> alert-custom: false;
+    in-out property <bool> tray-percent: false;
 
     callback tick();
     callback request-refresh();
     callback pick(int);
     callback snooze(string);
     callback notifications-toggled(bool);
+    callback alert-level-changed(int);
+    callback alert-level-cleared();
+    callback tray-percent-toggled(bool);
     callback show-about();
 
     // Drains whatever the device worker collected, and keeps the relative ages fresh.
@@ -510,29 +587,30 @@ export component AppWindow inherits Window {
             spacing: 14px;
             cross-axis-alignment: center;
 
-            Text {
-                text: "Embr";
-                font-size: 20px;
-                font-weight: 700;
-                color: Tokens.text-primary;
-                vertical-alignment: center;
+            // The mark and the wordmark read as one unit, so they sit closer to each other than the
+            // header's own spacing. Nothing else belongs up here: a summary line next to the
+            // window's own name was noise on top of the list right below it.
+            HorizontalLayout {
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../../../assets/embr.svg");
+                    width: 22px;
+                    height: 22px;
+                    image-fit: contain;
+                }
+
+                Text {
+                    text: "Embr";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Tokens.text-primary;
+                    vertical-alignment: center;
+                }
             }
 
-            Text {
-                text: root.headline;
-                font-size: 13px;
-                color: Tokens.text-secondary;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-
-            Text {
-                text: root.last-updated;
-                font-size: 12px;
-                color: Tokens.text-tertiary;
-                vertical-alignment: center;
-            }
+            Rectangle { horizontal-stretch: 1; }
 
             Button {
                 text: root.refreshing ? "Refreshing…" : "Refresh";
@@ -745,14 +823,26 @@ export component AppWindow inherits Window {
                             changed(v) => { root.notifications-toggled(v); }
                         }
 
-                        SettingRow {
-                            title: "Notification thresholds";
-                            value: root.thresholds-text;
+                        // Only meaningful with a device selected, which is also the only time
+                        // the rest of this card has anything to say.
+                        if root.has-devices: AlertLevelRow {
+                            default-text: "shared: " + root.thresholds-text;
+                            custom: root.alert-custom;
+                            level <=> root.alert-level;
+                            leveled(v) => { root.alert-level-changed(v); }
+                            cleared => { root.alert-level-cleared(); }
                         }
 
                         SettingRow {
                             title: "Refresh interval";
                             value: "\{root.refresh-seconds} s";
+                        }
+
+                        SettingRow {
+                            title: "Tray icon shows the level";
+                            with-switch: true;
+                            toggled <=> root.tray-percent;
+                            changed(v) => { root.tray-percent-toggled(v); }
                         }
 
                         if root.notice != "": Text {
@@ -774,8 +864,11 @@ export component AppWindow inherits Window {
 /// here rather than buried, because this build really does use Slint under the hood.
 export component AboutWindow inherits Window {
     title: "About Embr";
+    default-font-family: "Noto Sans";
+    icon: @image-url("../../../assets/embr.svg");
     width: 460px;
-    height: 340px;
+    // Tall enough for the mark, three lines of text, the Slint attribution and the button.
+    height: 420px;
     background: Tokens.bg;
 
     callback close-requested();
@@ -784,6 +877,16 @@ export component AboutWindow inherits Window {
         padding: 26px;
         spacing: 12px;
         alignment: center;
+
+        Image {
+            source: @image-url("../../../assets/embr.svg");
+            width: 100%;
+            height: 72px;
+            image-fit: contain;
+            // The layout stretches children across its cross axis, so the mark needs to say where
+            // it sits inside that width.
+            horizontal-alignment: center;
+        }
 
         Text {
             text: "Embr";
@@ -794,7 +897,7 @@ export component AboutWindow inherits Window {
         }
 
         Text {
-            text: "A Rust user interface for Logitech HID++ devices.";
+            text: "A battery monitor for Logitech devices on Linux.";
             font-size: 13px;
             color: Tokens.text-secondary;
             horizontal-alignment: center;
@@ -802,7 +905,7 @@ export component AboutWindow inherits Window {
         }
 
         Text {
-            text: "Battery levels, connection state and the device list come from the app's own HID++ implementation — no solaar, no hidapi, no Python.";
+            text: "Reads the devices directly over HID++ and shows what they report — charge, voltage, connection state and the device list.";
             font-size: 12px;
             color: Tokens.text-tertiary;
             horizontal-alignment: center;
@@ -811,11 +914,19 @@ export component AboutWindow inherits Window {
 
         AboutSlint { }
 
-        Button {
-            text: "Close";
-            width: 96px;
+        // A layout positions a fixed-width child at the start of its cross axis, so the button is
+        // centred inside a full-width strip instead of stretching to the whole dialog.
+        Rectangle {
             height: 30px;
-            clicked => { root.close-requested(); }
+            background: transparent;
+
+            Button {
+                text: "Close";
+                width: 96px;
+                height: 30px;
+                x: (parent.width - self.width) / 2;
+                clicked => { root.close-requested(); }
+            }
         }
     }
 }

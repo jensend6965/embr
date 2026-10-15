@@ -26,6 +26,9 @@ pub struct Monitor {
     config: Config,
     policy: BatteryPolicy,
     snapshot: Snapshot,
+    /// The last discovery report, kept so that a changed setting can be shown in the window
+    /// without going back to the hardware for a number nothing has changed about.
+    last_report: Option<DiscoveryReport>,
     /// Problems to show the user once (a bad config file, a receiver that did not answer).
     pub notices: Vec<String>,
 }
@@ -42,6 +45,7 @@ impl Monitor {
             config,
             policy,
             snapshot,
+            last_report: None,
             notices,
         }
     }
@@ -63,6 +67,7 @@ impl Monitor {
     pub fn set_config(&mut self, config: Config) {
         self.config = config;
         self.policy.set_settings(settings_from(&self.config));
+        self.rebuild();
     }
 
     /// Write the current configuration back to disk, returning why it failed if it did.
@@ -101,7 +106,18 @@ impl Monitor {
             }
         }
         self.snapshot = Snapshot::from_report(&report, &self.config);
+        self.last_report = Some(report);
         alerts
+    }
+
+    /// Re-derive the snapshot from the readings already in hand, after the configuration
+    /// changed. Nothing here opens a device: a threshold the user just moved must show up in
+    /// the window at once, not one slow sweep later.
+    pub fn rebuild(&mut self) {
+        if let Some(report) = self.last_report.take() {
+            self.snapshot = Snapshot::from_report(&report, &self.config);
+            self.last_report = Some(report);
+        }
     }
 
     /// Keep quiet about one device for the configured snooze period.
@@ -115,12 +131,46 @@ impl Monitor {
         self.policy.set_settings(settings_from(&self.config));
         self.save_config()
     }
+
+    /// Give one device its own alert level — or, with `None`, put it back on the shared
+    /// thresholds. Remember the choice.
+    pub fn set_device_alert_level(&mut self, key: &str, level: Option<u8>) -> Result<(), String> {
+        match level {
+            Some(level) => {
+                self.config
+                    .notifications
+                    .per_device
+                    .insert(key.to_string(), level.clamp(1, 99));
+            }
+            None => {
+                self.config.notifications.per_device.remove(key);
+            }
+        }
+        self.config.sanitise();
+        self.policy.set_settings(settings_from(&self.config));
+        self.rebuild();
+        self.save_config()
+    }
+
+    /// Draw the worst battery as a number in the tray icon, or as the battery glyph.
+    pub fn set_tray_shows_percent(&mut self, enabled: bool) -> Result<(), String> {
+        self.config.ui.tray_shows_percent = enabled;
+        self.save_config()
+    }
 }
 
 fn settings_from(config: &Config) -> PolicySettings {
     PolicySettings {
         enabled: config.notifications.enabled,
         thresholds: config.notifications.thresholds.clone(),
+        // The file holds one level per device; the policy watches a list, because a device
+        // could grow a second one without the file's shape changing.
+        per_device: config
+            .notifications
+            .per_device
+            .iter()
+            .map(|(key, level)| (key.clone(), vec![*level]))
+            .collect(),
         hysteresis: config.notifications.hysteresis_percent,
         rate_limit: std::time::Duration::from_secs(config.notifications.rate_limit_seconds),
         snooze: std::time::Duration::from_secs(config.notifications.snooze_minutes * 60),
@@ -214,5 +264,39 @@ mod tests {
         let monitor = Monitor::from_disk();
         // The notice list always explains the default state; the point is that it exists.
         assert!(!monitor.notices.is_empty());
+    }
+
+    #[test]
+    fn a_level_for_one_device_makes_that_device_speak() {
+        let mut config = Config::default();
+        config.notifications.enabled = true;
+        config
+            .notifications
+            .per_device
+            .insert("g733".to_string(), 45);
+        let mut monitor = Monitor::new(config);
+        let alerts = monitor.refresh_from(report(vec![device("G733", 39)]));
+        assert_eq!(alerts.len(), 1, "39 % is below the headset's own 45 %");
+        let (_, body) = alerts[0].title_and_body();
+        assert!(body.contains("below 45%"), "{body}");
+    }
+
+    #[test]
+    fn a_changed_level_reaches_the_window_without_a_new_sweep() {
+        let mut monitor = Monitor::new(Config::default());
+        monitor.refresh_from(report(vec![device("G733", 39)]));
+        assert_eq!(monitor.snapshot().devices[0].alert_below, None);
+        assert_eq!(monitor.snapshot().devices[0].alert_below_effective, 20);
+
+        let mut config = Config::default();
+        config
+            .notifications
+            .per_device
+            .insert("g733".to_string(), 45);
+        monitor.set_config(config);
+
+        // Same readings, new setting: the snapshot is re-derived from the report in hand.
+        assert_eq!(monitor.snapshot().devices[0].alert_below, Some(45));
+        assert_eq!(monitor.snapshot().devices[0].alert_below_effective, 45);
     }
 }

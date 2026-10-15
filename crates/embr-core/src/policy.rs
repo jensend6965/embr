@@ -14,7 +14,7 @@
 //!   notifications in one second;
 //! * **snooze** — the user acknowledged this device, so leave it alone for a while.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 use embr_hidpp::{BatteryReading, ChargeStatus};
@@ -23,8 +23,12 @@ use embr_hidpp::{BatteryReading, ChargeStatus};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicySettings {
     pub enabled: bool,
-    /// Thresholds to watch, any order (they are sorted internally).
+    /// Thresholds to watch, any order (they are sorted internally). The default for every
+    /// device.
     pub thresholds: Vec<u8>,
+    /// One device's own thresholds, keyed by its stable key. A device listed here watches these
+    /// instead of `thresholds` — one level the user chose for it, not the shared pair.
+    pub per_device: BTreeMap<String, Vec<u8>>,
     /// Percent the level must recover by before a fired threshold can fire again.
     pub hysteresis: u8,
     /// At most one alert per this window across all devices.
@@ -38,10 +42,36 @@ impl Default for PolicySettings {
         Self {
             enabled: false,
             thresholds: vec![20, 10],
+            per_device: BTreeMap::new(),
             hysteresis: 5,
             rate_limit: Duration::from_secs(60),
             snooze: Duration::from_secs(30 * 60),
         }
+    }
+}
+
+impl PolicySettings {
+    /// The thresholds that apply to one device: its own when it has them, else the defaults.
+    pub fn thresholds_for(&self, key: &str) -> &[u8] {
+        match self.per_device.get(key) {
+            Some(levels) => levels,
+            None => &self.thresholds,
+        }
+    }
+
+    /// Everything tidied up: sorted, de-duplicated, unusable entries dropped, and a per-device
+    /// level that is identical to the defaults removed (it would mean nothing, and its absence
+    /// keeps a settings change from looking like a threshold change).
+    fn normalised(mut self) -> Self {
+        self.thresholds = normalise_thresholds(&self.thresholds);
+        let defaults = self.thresholds.clone();
+        self.per_device = self
+            .per_device
+            .into_iter()
+            .map(|(key, levels)| (key, tidy(&levels)))
+            .filter(|(_, levels)| !levels.is_empty() && *levels != defaults)
+            .collect();
+        self
     }
 }
 
@@ -122,10 +152,8 @@ pub struct BatteryPolicy {
 
 impl BatteryPolicy {
     pub fn new(settings: PolicySettings) -> Self {
-        let mut settings = settings;
-        settings.thresholds = normalise_thresholds(&settings.thresholds);
         Self {
-            settings,
+            settings: settings.normalised(),
             devices: HashMap::new(),
             last_alert: None,
         }
@@ -136,19 +164,25 @@ impl BatteryPolicy {
     }
 
     pub fn set_settings(&mut self, settings: PolicySettings) {
-        let mut settings = settings;
-        settings.thresholds = normalise_thresholds(&settings.thresholds);
-        let previous = std::mem::replace(&mut self.settings, settings);
-        if previous.thresholds != self.settings.thresholds {
-            // Only a change to the threshold list re-arms anything: a threshold that is new
-            // (or newly different) can fire, one the user already saw reported cannot. This
-            // is what keeps "switch notifications on" from replaying old crossings.
-            for state in self.devices.values_mut() {
-                state.armed.retain(|t| self.settings.thresholds.contains(t));
-                for threshold in &self.settings.thresholds {
-                    if !state.armed.contains(threshold) {
-                        state.armed.push(*threshold);
-                    }
+        let previous = std::mem::replace(&mut self.settings, settings.normalised());
+        // Only a change to a device's own thresholds re-arms anything: a threshold that is new
+        // (or newly different) can fire, one the user already saw reported cannot. This is what
+        // keeps "switch notifications on" from replaying old crossings — and what lets a level
+        // set for one device speak at once, without touching what its neighbours remember.
+        let keys: Vec<String> = self.devices.keys().cloned().collect();
+        for key in keys {
+            let before = previous.thresholds_for(&key).to_vec();
+            let after = self.settings.thresholds_for(&key).to_vec();
+            if before == after {
+                continue;
+            }
+            let Some(state) = self.devices.get_mut(&key) else {
+                continue;
+            };
+            state.armed.retain(|t| after.contains(t));
+            for threshold in &after {
+                if !state.armed.contains(threshold) {
+                    state.armed.push(*threshold);
                 }
             }
         }
@@ -163,17 +197,19 @@ impl BatteryPolicy {
         now: Instant,
     ) -> Vec<Alert> {
         let settings = self.settings.clone();
+        // This device's own thresholds, or the shared defaults.
+        let thresholds = settings.thresholds_for(key).to_vec();
         let state = self.devices.entry(key.to_string()).or_default();
         if !state.initialised {
             state.initialised = true;
-            state.armed = settings.thresholds.clone();
+            state.armed = thresholds.clone();
         }
 
         // A charging device is not a low-battery story, and a failed battery is a different
         // story that the window shows but a notification would only get wrong.
         if reading.status.charging() {
             state.charging = true;
-            state.armed = settings.thresholds.clone();
+            state.armed = thresholds.clone();
             // "Charged" is worth exactly one message per charge cycle. Devices disagree
             // about how they announce it — some go to FULL, others just sit at 100% while
             // still reporting RECHARGING — so both count.
@@ -201,7 +237,7 @@ impl BatteryPolicy {
             // Back on battery: this is a new discharge cycle.
             state.charging = false;
             state.charged_sent = false;
-            state.armed = settings.thresholds.clone();
+            state.armed = thresholds.clone();
         }
 
         let Some(percent) = reading.percent.map(|p| p.value) else {
@@ -210,7 +246,7 @@ impl BatteryPolicy {
 
         let mut alerts = Vec::new();
         // Re-arm thresholds the device has recovered past.
-        for threshold in settings.thresholds.iter().copied() {
+        for threshold in thresholds.iter().copied() {
             let recovered = percent >= threshold.saturating_add(settings.hysteresis);
             if recovered && !state.armed.contains(&threshold) {
                 state.armed.push(threshold);
@@ -286,7 +322,7 @@ impl BatteryPolicy {
     }
 }
 
-fn normalise_thresholds(thresholds: &[u8]) -> Vec<u8> {
+fn tidy(thresholds: &[u8]) -> Vec<u8> {
     let mut levels: Vec<u8> = thresholds
         .iter()
         .copied()
@@ -295,10 +331,16 @@ fn normalise_thresholds(thresholds: &[u8]) -> Vec<u8> {
     levels.sort_unstable();
     levels.dedup();
     levels.reverse();
-    if levels.is_empty() {
-        levels = PolicySettings::default().thresholds;
-    }
     levels
+}
+
+fn normalise_thresholds(thresholds: &[u8]) -> Vec<u8> {
+    let levels = tidy(thresholds);
+    if levels.is_empty() {
+        PolicySettings::default().thresholds
+    } else {
+        levels
+    }
 }
 
 #[cfg(test)]
@@ -595,8 +637,150 @@ mod tests {
     fn thresholds_are_normalised_on_construction() {
         let policy = BatteryPolicy::new(PolicySettings {
             thresholds: vec![0, 10, 20, 20, 200],
+            per_device: BTreeMap::from([
+                ("a".to_string(), vec![0, 30, 30, 250]),
+                // nothing usable in this one: the entry goes and the device keeps the defaults
+                ("b".to_string(), vec![200, 0]),
+                // identical to the defaults: it would mean nothing, so it is dropped too
+                ("c".to_string(), vec![10, 20]),
+            ]),
             ..PolicySettings::default()
         });
         assert_eq!(policy.settings().thresholds, vec![20, 10]);
+        assert_eq!(policy.settings().thresholds_for("a"), &[30]);
+        assert_eq!(policy.settings().thresholds_for("b"), &[20, 10]);
+        assert_eq!(policy.settings().thresholds_for("c"), &[20, 10]);
+        assert!(!policy.settings().per_device.contains_key("c"));
+    }
+
+    /// A level the user picked for one device replaces the shared pair for that device alone.
+    fn with_device_level(key: &str, level: u8) -> PolicySettings {
+        PolicySettings {
+            enabled: true,
+            per_device: BTreeMap::from([(key.to_string(), vec![level])]),
+            ..PolicySettings::default()
+        }
+    }
+
+    #[test]
+    fn a_device_with_its_own_level_watches_that_level_and_not_the_defaults() {
+        let mut policy = BatteryPolicy::new(with_device_level("headset", 40));
+        let t0 = Instant::now();
+        assert!(
+            policy
+                .observe("headset", "G733", &discharging(45), t0)
+                .is_empty(),
+            "45 % is above its own 40 % threshold"
+        );
+        let alerts = policy.observe(
+            "headset",
+            "G733",
+            &discharging(39),
+            t0 + Duration::from_secs(120),
+        );
+        assert_eq!(alerts.len(), 1);
+        assert!(matches!(alerts[0], Alert::Low { threshold: 40, .. }));
+        assert_eq!(
+            policy
+                .observe(
+                    "headset",
+                    "G733",
+                    &discharging(15),
+                    t0 + Duration::from_secs(600)
+                )
+                .len(),
+            0,
+            "its own level replaces the defaults: no second alert on the way to 10 %"
+        );
+    }
+
+    #[test]
+    fn one_devices_level_does_not_leak_to_its_neighbours() {
+        let mut policy = BatteryPolicy::new(with_device_level("headset", 40));
+        let t0 = Instant::now();
+        let alerts = policy.observe("mouse", "G703", &discharging(19), t0);
+        assert_eq!(alerts.len(), 1);
+        assert!(
+            matches!(alerts[0], Alert::Low { threshold: 20, .. }),
+            "the mouse still watches the default 20 % / 10 %"
+        );
+    }
+
+    #[test]
+    fn setting_a_level_for_a_device_that_is_already_low_speaks_once() {
+        let mut policy = policy();
+        let t0 = Instant::now();
+        assert!(
+            policy
+                .observe("headset", "G733", &discharging(35), t0)
+                .is_empty(),
+            "35 % is above both defaults"
+        );
+        let mut settings = policy.settings().clone();
+        settings.per_device.insert("headset".to_string(), vec![40]);
+        policy.set_settings(settings);
+        let alerts = policy.observe(
+            "headset",
+            "G733",
+            &discharging(35),
+            t0 + Duration::from_secs(1),
+        );
+        assert_eq!(
+            alerts.len(),
+            1,
+            "the level the user just chose is worth saying out loud"
+        );
+        assert!(matches!(alerts[0], Alert::Low { threshold: 40, .. }));
+    }
+
+    #[test]
+    fn clearing_a_level_returns_the_device_to_the_defaults() {
+        let mut policy = BatteryPolicy::new(with_device_level("headset", 40));
+        let t0 = Instant::now();
+        assert_eq!(
+            policy
+                .observe("headset", "G733", &discharging(39), t0)
+                .len(),
+            1
+        );
+        policy.set_settings(PolicySettings {
+            enabled: true,
+            ..PolicySettings::default()
+        });
+        let alerts = policy.observe(
+            "headset",
+            "G733",
+            &discharging(19),
+            t0 + Duration::from_secs(120),
+        );
+        assert_eq!(alerts.len(), 1, "back on the defaults, 20 % speaks");
+        assert!(matches!(alerts[0], Alert::Low { threshold: 20, .. }));
+    }
+
+    #[test]
+    fn changing_another_devices_level_does_not_re_arm_this_one() {
+        let mut policy = BatteryPolicy::new(PolicySettings {
+            enabled: true,
+            ..PolicySettings::default()
+        });
+        let t0 = Instant::now();
+        assert_eq!(
+            policy.observe("mouse", "G703", &discharging(19), t0).len(),
+            1
+        );
+        let mut settings = policy.settings().clone();
+        settings.per_device.insert("headset".to_string(), vec![40]);
+        policy.set_settings(settings);
+        assert!(
+            policy
+                .observe(
+                    "mouse",
+                    "G703",
+                    &discharging(19),
+                    t0 + Duration::from_secs(120)
+                )
+                .is_empty(),
+            "a mouse that already complained must not complain again because a headset was configured"
+        );
     }
 }

@@ -14,8 +14,8 @@
 //! [`UiRequest`] outward — and never a Slint object.
 //!
 //! Everything the window shows comes from `core`: the device list, the percentage text with
-//! its `~` for an estimate, the status label, the headline, the tray tooltip and the ages.
-//! This crate draws them and nothing else.
+//! its `~` for an estimate, the status label, the tray tooltip and the ages. This crate draws
+//! them and nothing else.
 
 mod messages;
 mod notify;
@@ -40,6 +40,30 @@ use messages::{Command, UiRequest, UiState};
 type SharedState = Rc<RefCell<Option<UiState>>>;
 /// The selected device, remembered by its stable key: the list is re-sorted on every pass.
 type Selection = Rc<RefCell<Option<String>>>;
+
+/// The last value pushed into every control the user can also move.
+///
+/// A `Switch` fires when its value changes — including when we are the ones changing it — and
+/// the alert level must not be dragged back to the old number while the user is still moving
+/// it. "What is still in flight?" is what tells a user's action from our own echo.
+#[derive(Clone)]
+struct Pushed {
+    notifications: Rc<Cell<bool>>,
+    tray_percent: Rc<Cell<bool>>,
+    /// An alert level the user set that the device thread has not confirmed yet; `-1` when
+    /// there is nothing in flight.
+    alert_pending: Rc<Cell<i32>>,
+}
+
+impl Pushed {
+    fn new() -> Self {
+        Self {
+            notifications: Rc::new(Cell::new(false)),
+            tray_percent: Rc::new(Cell::new(false)),
+            alert_pending: Rc::new(Cell::new(-1)),
+        }
+    }
+}
 
 fn main() -> Result<(), slint::PlatformError> {
     let launched = Instant::now();
@@ -78,8 +102,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let latest: SharedState = Rc::new(RefCell::new(None));
     let selection: Selection = Rc::new(RefCell::new(None));
-    // What the switch was last told to be: used to tell a user's click from our own update.
-    let switch_value = Rc::new(Cell::new(false));
+    let pushed = Pushed::new();
 
     window.on_request_refresh({
         let window = window.as_weak();
@@ -123,18 +146,87 @@ fn main() -> Result<(), slint::PlatformError> {
 
     window.on_notifications_toggled({
         let commands = commands.clone();
-        let switch_value = switch_value.clone();
+        let pushed = pushed.clone();
         move |enabled| {
-            if enabled == switch_value.get() {
+            if enabled == pushed.notifications.get() {
                 // The value we pushed into the switch coming back at us, not a user action.
                 return;
             }
-            switch_value.set(enabled);
+            pushed.notifications.set(enabled);
             eprintln!(
                 "[app] battery notifications switched {}",
                 if enabled { "on" } else { "off" }
             );
             if commands.send(Command::SetNotifications(enabled)).is_err() {
+                eprintln!("[app] the device thread has stopped; the choice was not saved");
+            }
+        }
+    });
+
+    // The spin box shows the selected device's alert level. A user's move is remembered where
+    // the switch remembers too, so the next snapshot can tell an edit in flight from a value
+    // that simply changed.
+    window.on_alert_level_changed({
+        let commands = commands.clone();
+        let latest = latest.clone();
+        let selection = selection.clone();
+        let pushed = pushed.clone();
+        move |level| {
+            let level = level.clamp(1, 99) as u8;
+            pushed.alert_pending.set(i32::from(level));
+            let Some(key) = selected_key(&latest, &selection) else {
+                eprintln!("[app] no device is selected; the alert level was not saved");
+                return;
+            };
+            eprintln!("[app] {key} alerts at {level}% from now on");
+            let command = Command::SetDeviceAlertLevel {
+                key,
+                level: Some(level),
+            };
+            if commands.send(command).is_err() {
+                eprintln!("[app] the device thread has stopped; the level was not saved");
+            }
+        }
+    });
+
+    window.on_alert_level_cleared({
+        let commands = commands.clone();
+        let latest = latest.clone();
+        let selection = selection.clone();
+        let pushed = pushed.clone();
+        move || {
+            // What the shared thresholds will read is not known here until the device thread
+            // answers, so the box is left alone until that snapshot arrives.
+            pushed.alert_pending.set(-1);
+            let Some(key) = selected_key(&latest, &selection) else {
+                eprintln!("[app] no device is selected; there was nothing to clear");
+                return;
+            };
+            eprintln!("[app] {key} goes back to the shared thresholds");
+            let command = Command::SetDeviceAlertLevel { key, level: None };
+            if commands.send(command).is_err() {
+                eprintln!("[app] the device thread has stopped; the level was not cleared");
+            }
+        }
+    });
+
+    window.on_tray_percent_toggled({
+        let commands = commands.clone();
+        let pushed = pushed.clone();
+        move |enabled| {
+            if enabled == pushed.tray_percent.get() {
+                return;
+            }
+            pushed.tray_percent.set(enabled);
+            eprintln!(
+                "[app] the tray icon shows {}",
+                if enabled {
+                    "the lowest percentage"
+                } else {
+                    "a battery"
+                }
+            );
+            if commands.send(Command::SetTrayPercent(enabled)).is_err() {
                 eprintln!("[app] the device thread has stopped; the choice was not saved");
             }
         }
@@ -150,6 +242,21 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         }
     });
+
+    // The About window is otherwise reachable only by clicking, which makes it awkward to look at
+    // when checking a change to it. Same shape as `EMBR_DEBUG_ALERT` in the worker — and it is
+    // raised from inside the event loop, because showing it beforehand leaves it behind the main
+    // window.
+    if std::env::var_os("EMBR_DEBUG_ABOUT").is_some() {
+        let about = about.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(500), move || {
+            if let Some(about) = about.upgrade()
+                && let Err(problem) = about.show()
+            {
+                eprintln!("[app] EMBR_DEBUG_ABOUT: could not show the About window: {problem}");
+            }
+        });
+    }
 
     about.on_close_requested({
         let about = about.as_weak();
@@ -167,7 +274,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let latest = latest.clone();
         let selection = selection.clone();
         let rows = rows.clone();
-        let switch_value = switch_value.clone();
+        let pushed = pushed.clone();
         move || {
             // 1. What the tray or a notification asked the window to do.
             while let Ok(request) = request_queue.try_recv() {
@@ -191,7 +298,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // 2. What the device thread has produced since the last tick.
             while let Ok(state) = state_queue.try_recv() {
                 if let Some(window) = window.upgrade() {
-                    apply(&window, &latest, &selection, &rows, &switch_value, state);
+                    apply(&window, &latest, &selection, &rows, &pushed, state);
                 }
             }
             // 3. Keep the relative ages honest.
@@ -213,13 +320,13 @@ fn main() -> Result<(), slint::PlatformError> {
     Ok(())
 }
 
-/// Take one snapshot into the window: the list, the headline and the settings.
+/// Take one snapshot into the window: the list, the detail card and the settings.
 fn apply(
     window: &AppWindow,
     latest: &SharedState,
     selection: &Selection,
     rows: &Rc<VecModel<Device>>,
-    switch_value: &Rc<Cell<bool>>,
+    pushed: &Pushed,
     state: UiState,
 ) {
     // The selection survives a refresh, and only a device that is still there can stay
@@ -249,16 +356,51 @@ fn apply(
             .collect::<Vec<_>>(),
     );
 
-    window.set_headline(state.snapshot.headline().into());
     window.set_refresh_seconds(state.refresh_seconds as i32);
     window.set_thresholds_text(state.thresholds_text.clone().into());
     window.set_notice(state.notice.clone().unwrap_or_default().into());
-    switch_value.set(state.notifications_enabled);
+    pushed.notifications.set(state.notifications_enabled);
     window.set_notifications_enabled(state.notifications_enabled);
+    pushed.tray_percent.set(state.tray_shows_percent);
+    window.set_tray_percent(state.tray_shows_percent);
+    apply_alert_level(window, &state, selection, pushed);
     window.set_refreshing(false);
 
     *latest.borrow_mut() = Some(state);
     tick_ages(window, latest, selection, rows);
+}
+
+/// Put the selected device's alert level into the spin box — unless a snapshot from before
+/// the user's edit is what is in hand, in which case it is the older number and has no
+/// business overwriting the newer one. The snapshot that confirms the edit is what closes
+/// that window, and it also drags the box in line if the two ever disagree.
+fn apply_alert_level(window: &AppWindow, state: &UiState, selection: &Selection, pushed: &Pushed) {
+    let selected = selection.borrow().clone();
+    let (level, custom) = state
+        .snapshot
+        .devices
+        .iter()
+        .find(|device| Some(&device.key) == selected.as_ref())
+        .map(|device| {
+            (
+                i32::from(device.alert_below_effective),
+                device.alert_below.is_some(),
+            )
+        })
+        .unwrap_or((20, false));
+
+    let pending = pushed.alert_pending.get();
+    if pending == level {
+        // The device thread has agreed with what the user set: nothing is in flight any more.
+        pushed.alert_pending.set(-1);
+    } else if pending >= 0 {
+        return;
+    }
+
+    if window.get_alert_level() != level {
+        window.set_alert_level(level);
+    }
+    window.set_alert_custom(custom);
 }
 
 /// Draw the selected device from the latest snapshot. Safe to call at any time: without a
@@ -303,13 +445,9 @@ fn tick_ages(
     match state.snapshot.taken {
         Some(taken) => {
             let age = embr_core::human_age(taken, SystemTime::now());
-            window.set_last_updated(format!("Last updated {age}").into());
             window.set_last_updated_label(age.into());
         }
-        None => {
-            window.set_last_updated("Not updated yet".into());
-            window.set_last_updated_label("never".into());
-        }
+        None => window.set_last_updated_label("never".into()),
     }
 
     // A row is only rewritten when its age text has actually changed, so the list is not
@@ -325,4 +463,18 @@ fn tick_ages(
     }
 
     show_selected(window, latest, selection);
+}
+
+/// The key of the device the details card is showing, if there is one — which device a setting
+/// phrased as "this device" applies to.
+fn selected_key(latest: &SharedState, selection: &Selection) -> Option<String> {
+    let key = selection.borrow().clone()?;
+    let borrowed = latest.borrow();
+    let state = borrowed.as_ref()?;
+    state
+        .snapshot
+        .devices
+        .iter()
+        .any(|device| device.key == key)
+        .then_some(key)
 }
