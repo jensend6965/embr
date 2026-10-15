@@ -14,7 +14,7 @@ pub mod view;
 
 use std::time::Instant;
 
-use hidpp::discover::{self, DiscoveryReport};
+use embr_hidpp::discover::{self, DiscoveryReport};
 
 pub use config::{Config, Notifications, default_path};
 pub use policy::{Alert, BatteryPolicy, PolicySettings};
@@ -130,8 +130,8 @@ fn settings_from(config: &Config) -> PolicySettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hidpp::battery::{BatteryReading, ChargeStatus, Percent, PercentSource};
-    use hidpp::discover::{Connection, Device, DeviceKind, DiscoveryReport};
+    use embr_hidpp::battery::{BatteryReading, ChargeStatus, Percent, PercentSource};
+    use embr_hidpp::discover::{Connection, Device, DeviceKind, DiscoveryReport};
 
     fn report(devices: Vec<Device>) -> DiscoveryReport {
         let nodes_seen = devices.len();

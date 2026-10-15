@@ -1,0 +1,20 @@
+[package]
+name = "embr"
+description = "Embr's desktop window: device list, battery bars, settings, tray icon and notifications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "embr"
+path = "src/main.rs"
+
+[dependencies]
+embr-core = { path = "../embr-core" }
+slint.workspace = true
+ksni.workspace = true
+notify-rust.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true

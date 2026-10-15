@@ -1,12 +1,13 @@
 [package]
-name = "core"
+name = "embr-core"
 description = "Battery policy, configuration and the view model — no display, no HID++"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
-hidpp = { path = "../hidpp" }
+embr-hidpp = { path = "../embr-hidpp" }
 serde.workspace = true
 toml.workspace = true
 thiserror.workspace = true

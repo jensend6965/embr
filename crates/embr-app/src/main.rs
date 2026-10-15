@@ -1,4 +1,4 @@
-//! Periphery — the window that shows what the Logitech devices on this machine are doing.
+//! Embr — the window that shows what the Logitech devices on this machine are doing.
 //!
 //! Three threads, and nothing shared between them:
 //!
@@ -30,7 +30,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Instant, SystemTime};
 
-use logi_core::Alert;
+use embr_core::Alert;
 use slint::{Model, ModelRc, VecModel};
 
 use messages::{Command, UiRequest, UiState};
@@ -55,11 +55,11 @@ fn main() -> Result<(), slint::PlatformError> {
 
     // --- the tray: registered normally, drawn only if Noctalia has it pinned (see README) ---
     let tray_service =
-        ksni::TrayService::new(tray::PeripheryTray::new(commands.clone(), requests.clone()));
+        ksni::TrayService::new(tray::EmbrTray::new(commands.clone(), requests.clone()));
     let tray_handle = tray_service.handle();
     tray_service.spawn();
     eprintln!(
-        "[app] StatusNotifierItem registered with id \"periphery\" (Noctalia draws it only when pinned)"
+        "[app] StatusNotifierItem registered with id \"embr\" (Noctalia draws it only when pinned)"
     );
 
     // --- the threads that are allowed to be slow ---
@@ -302,7 +302,7 @@ fn tick_ages(
 
     match state.snapshot.taken {
         Some(taken) => {
-            let age = logi_core::human_age(taken, SystemTime::now());
+            let age = embr_core::human_age(taken, SystemTime::now());
             window.set_last_updated(format!("Last updated {age}").into());
             window.set_last_updated_label(age.into());
         }

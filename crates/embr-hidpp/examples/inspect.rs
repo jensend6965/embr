@@ -14,8 +14,8 @@ use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use hidpp::report::{DEVICE_SELF, Feature, FeatureCall};
-use hidpp::transport::Channel;
+use embr_hidpp::report::{DEVICE_SELF, Feature, FeatureCall};
+use embr_hidpp::transport::Channel;
 
 fn main() {
     let path = env::args()

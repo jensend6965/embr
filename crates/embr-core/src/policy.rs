@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use hidpp::{BatteryReading, ChargeStatus};
+use embr_hidpp::{BatteryReading, ChargeStatus};
 
 /// The user's wishes, as the policy needs them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,7 +304,7 @@ fn normalise_thresholds(thresholds: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hidpp::{BatteryReading, ChargeStatus, Percent, PercentSource};
+    use embr_hidpp::{BatteryReading, ChargeStatus, Percent, PercentSource};
 
     fn discharging(percent: u8) -> BatteryReading {
         BatteryReading::new(

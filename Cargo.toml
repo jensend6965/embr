@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/hidpp", "crates/core", "crates/app"]
+members = ["crates/embr-hidpp", "crates/embr-core", "crates/embr-app"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Jensen"]
-# Licence is still open (see README §Licence). Nothing is published yet.
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/jensend6965/embr"
 
 [workspace.dependencies]
 libc = "0.2"

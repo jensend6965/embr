@@ -5,7 +5,7 @@
 
 use std::time::SystemTime;
 
-use hidpp::discover::{Device, DiscoveryReport};
+use embr_hidpp::discover::{Device, DiscoveryReport};
 
 use crate::config::Config;
 
@@ -169,8 +169,8 @@ pub fn human_age(captured: SystemTime, now: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hidpp::battery::{BatteryReading, ChargeStatus, Percent, PercentSource};
-    use hidpp::discover::{Connection, DeviceKind};
+    use embr_hidpp::battery::{BatteryReading, ChargeStatus, Percent, PercentSource};
+    use embr_hidpp::discover::{Connection, DeviceKind};
     use std::time::Duration;
 
     fn device(name: &str, percent: Option<(u8, PercentSource)>) -> Device {

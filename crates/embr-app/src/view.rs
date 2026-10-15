@@ -6,7 +6,7 @@
 
 use std::time::SystemTime;
 
-use logi_core::{DeviceView, human_age};
+use embr_core::{DeviceView, human_age};
 
 use crate::Device;
 

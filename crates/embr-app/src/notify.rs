@@ -8,12 +8,12 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 
-use logi_core::Alert;
+use embr_core::Alert;
 use notify_rust::{Notification, Timeout, Urgency};
 
 use crate::messages::UiRequest;
 
-const APP_NAME: &str = "Periphery";
+const APP_NAME: &str = "Embr";
 /// The identifier of the notification's action button, as the notification server sees it.
 const SHOW_DEVICES_ACTION: &str = "show";
 const NOTIFICATION_TIMEOUT_MS: u32 = 8000;

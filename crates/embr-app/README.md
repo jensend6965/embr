@@ -1,17 +1,17 @@
-# `periphery` — the desktop app
+# `embr` — the desktop app
 
 The window for the Logitech device monitor: the device list with battery bars, a details
-card, the settings, a tray icon and desktop notifications. Binary name **`periphery`**.
+card, the settings, a tray icon and desktop notifications. Binary name **`embr`**.
 
-It draws what `logi-core` gives it and decides nothing: the device list, the percentage text
+It draws what `embr-core` gives it and decides nothing: the device list, the percentage text
 (including the `~` that marks a value inferred from voltage), the status label, the headline,
-the tray tooltip and the ages (`12s ago`) all come from the `core` crate.
+the tray tooltip and the ages (`12s ago`) all come from the `embr-core` crate.
 
 ## How to run it
 
 ```sh
 export PATH=$HOME/.cargo/bin:$PATH
-cargo run --release -p periphery       # or: ./target/release/periphery
+cargo run --release -p embr       # or: ./target/release/embr
 ```
 
 No root, no daemon, no system package: access to `/dev/hidraw*` comes from upstream's udev
@@ -54,7 +54,7 @@ tray click reaches the window within half a second without any cross-thread UI c
 ## Tray icons on KineticWE / Noctalia: the pinning caveat
 
 This is a plain StatusNotifierItem: it takes its own bus name
-(`org.kde.StatusNotifierItem-<pid>-1`), publishes `Id = periphery`, and registers with
+(`org.kde.StatusNotifierItem-<pid>-1`), publishes `Id = embr`, and registers with
 `org.kde.StatusNotifierWatcher`. On this desktop that is **registered but not drawn**: the
 Noctalia bar draws only the tray items whose application id is listed in `[widget.tray]`
 `pinned`, and puts everything else in the hover-only drawer.
@@ -65,10 +65,10 @@ application's id. To have the bar draw it, add the id to your Noctalia configura
 ```toml
 # ~/.config/noctalia-kwe/noctalia-config.toml
 [widget.tray]
-pinned = [ "Fcitx", "Discord", "equibop", "periphery" ]
+pinned = [ "Fcitx", "Discord", "equibop", "embr" ]
 ```
 
-`periphery` is the string `Tray::id()` returns. Reopen the shell (or reload its config) for
+`embr` is the string `Tray::id()` returns. Reopen the shell (or reload its config) for
 the change to take effect.
 
 ## Not implemented yet
@@ -88,7 +88,7 @@ the change to take effect.
 ## Hidden debug flag
 
 ```sh
-PERIPHERY_DEBUG_ALERT=1 ./target/release/periphery
+EMBR_DEBUG_ALERT=1 ./target/release/embr
 ```
 
 After every sweep this sends one synthetic low-battery alert through the same code a real one

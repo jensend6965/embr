@@ -7,7 +7,7 @@
 
 use std::sync::mpsc::Sender;
 
-use logi_core::{Alert, Snapshot};
+use embr_core::{Alert, Snapshot};
 
 /// UI thread or tray → the device thread.
 #[derive(Debug, Clone)]

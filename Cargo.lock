@@ -809,16 +809,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core"
-version = "0.1.0"
-dependencies = [
- "hidpp",
- "serde",
- "thiserror 2.0.21",
- "toml 0.8.23",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1108,6 +1098,35 @@ name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
+
+[[package]]
+name = "embr"
+version = "0.1.0"
+dependencies = [
+ "embr-core",
+ "ksni 0.2.2",
+ "notify-rust",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "embr-core"
+version = "0.1.0"
+dependencies = [
+ "embr-hidpp",
+ "serde",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "embr-hidpp"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "endi"
@@ -1750,14 +1769,6 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-
-[[package]]
-name = "hidpp"
-version = "0.1.0"
-dependencies = [
- "libc",
- "thiserror 2.0.21",
-]
 
 [[package]]
 name = "htmlparser"
@@ -3392,17 +3403,6 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-
-[[package]]
-name = "periphery"
-version = "0.1.0"
-dependencies = [
- "core",
- "ksni 0.2.2",
- "notify-rust",
- "slint",
- "slint-build",
-]
 
 [[package]]
 name = "petgraph"

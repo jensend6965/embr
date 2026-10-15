@@ -9,10 +9,10 @@
 //! It prints what sysfs shows, what each receiver's pairing table says, and the battery
 //! reading for every device — including, honestly, the ones that do not answer.
 
-use hidpp::report::Feature;
-use hidpp::sysfs::{self, Role};
-use hidpp::transport::{Channel, DEVICE_TIMEOUT, RECEIVER_TIMEOUT};
-use hidpp::{discover, receiver};
+use embr_hidpp::report::Feature;
+use embr_hidpp::sysfs::{self, Role};
+use embr_hidpp::transport::{Channel, DEVICE_TIMEOUT, RECEIVER_TIMEOUT};
+use embr_hidpp::{discover, receiver};
 
 fn main() {
     let nodes = sysfs::logitech_nodes();
@@ -76,8 +76,8 @@ fn main() {
             continue;
         };
         let index = match device.connection {
-            hidpp::discover::Connection::Receiver { slot, .. } => slot,
-            _ => hidpp::report::DEVICE_SELF,
+            embr_hidpp::discover::Connection::Receiver { slot, .. } => slot,
+            _ => embr_hidpp::report::DEVICE_SELF,
         };
         let caps = discover::capabilities(&mut channel, index, RECEIVER_TIMEOUT);
         if !caps.is_empty() {
@@ -113,8 +113,8 @@ fn main() {
             continue;
         };
         let index = match device.connection {
-            hidpp::discover::Connection::Receiver { slot, .. } => slot,
-            _ => hidpp::report::DEVICE_SELF,
+            embr_hidpp::discover::Connection::Receiver { slot, .. } => slot,
+            _ => embr_hidpp::report::DEVICE_SELF,
         };
         if let Ok(Some(feature_index)) =
             discover::feature_index(&mut channel, index, Feature::DeviceName, RECEIVER_TIMEOUT)
@@ -144,8 +144,8 @@ fn main() {
             continue;
         };
         let index = match device.connection {
-            hidpp::discover::Connection::Receiver { slot, .. } => slot,
-            _ => hidpp::report::DEVICE_SELF,
+            embr_hidpp::discover::Connection::Receiver { slot, .. } => slot,
+            _ => embr_hidpp::report::DEVICE_SELF,
         };
         let Ok(Some(feature_index)) =
             discover::feature_index(&mut channel, index, Feature::DeviceName, RECEIVER_TIMEOUT)

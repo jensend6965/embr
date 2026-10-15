@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Application directory name used under the XDG config home.
-pub const APP_DIR: &str = "logi-modern";
+pub const APP_DIR: &str = "embr";
 pub const FILE_NAME: &str = "config.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,8 +203,7 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("logi-modern-test-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("embr-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(FILE_NAME)

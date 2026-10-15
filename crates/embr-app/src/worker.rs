@@ -11,26 +11,26 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::Instant;
 
+use embr_core::{Alert, Monitor};
 use ksni::Handle;
-use logi_core::{Alert, Monitor};
 
 use crate::messages::{Command, UiState, dispatch_alert, thresholds_text};
-use crate::tray::PeripheryTray;
+use crate::tray::EmbrTray;
 
 /// Whatever the configuration file says, the window never asks for a faster cadence than
 /// this: a sweep is seconds of HID++ traffic and the devices are not ours alone.
 pub const MIN_REFRESH_SECONDS: u64 = 5;
 
 /// A hidden switch, for proving the notification path while notifications are off (the
-/// default): `PERIPHERY_DEBUG_ALERT=1 periphery` sends one synthetic low-battery alert
+/// default): `EMBR_DEBUG_ALERT=1 embr` sends one synthetic low-battery alert
 /// through the very same code a real one takes.
-const DEBUG_ALERT_VARIABLE: &str = "PERIPHERY_DEBUG_ALERT";
+const DEBUG_ALERT_VARIABLE: &str = "EMBR_DEBUG_ALERT";
 
 pub struct DeviceWorker {
     monitor: Monitor,
     states: Sender<UiState>,
     alerts: Sender<Alert>,
-    tray: Option<Handle<PeripheryTray>>,
+    tray: Option<Handle<EmbrTray>>,
     debug_alert: bool,
 }
 
@@ -40,7 +40,7 @@ pub fn spawn(
     commands: Receiver<Command>,
     states: Sender<UiState>,
     alerts: Sender<Alert>,
-    tray: Option<Handle<PeripheryTray>>,
+    tray: Option<Handle<EmbrTray>>,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     let worker = DeviceWorker {
         monitor: Monitor::from_disk(),

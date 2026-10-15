@@ -13,16 +13,16 @@
 
 use std::sync::mpsc::Sender;
 
+use embr_core::Snapshot;
 use ksni::menu::{MenuItem, StandardItem, SubMenu};
 use ksni::{Icon, ToolTip, Tray};
-use logi_core::Snapshot;
 
 use crate::messages::{Command, UiRequest};
 
 /// Toolbar pictogram: a battery body with the usual nub, coloured by the worst device.
 const ICON_SIDE: i32 = 22;
 
-pub struct PeripheryTray {
+pub struct EmbrTray {
     /// `Snapshot::tray_tooltip()` — every device with its level, one per line.
     pub tooltip: String,
     /// One row per device, exactly as the tooltip writes them.
@@ -33,7 +33,7 @@ pub struct PeripheryTray {
     ui: Sender<UiRequest>,
 }
 
-impl PeripheryTray {
+impl EmbrTray {
     pub fn new(commands: Sender<Command>, ui: Sender<UiRequest>) -> Self {
         Self {
             tooltip: "No Logitech devices found".to_string(),
@@ -78,14 +78,14 @@ pub fn labels(snapshot: &Snapshot) -> Vec<String> {
         .collect()
 }
 
-impl Tray for PeripheryTray {
+impl Tray for EmbrTray {
     /// The application id. Noctalia draws an item only when this exact string is pinned.
     fn id(&self) -> String {
-        "periphery".to_string()
+        "embr".to_string()
     }
 
     fn title(&self) -> String {
-        "Periphery".to_string()
+        "Embr".to_string()
     }
 
     fn category(&self) -> ksni::Category {
@@ -110,7 +110,7 @@ impl Tray for PeripheryTray {
         ToolTip {
             icon_name: String::new(),
             icon_pixmap: vec![battery_icon(self.level)],
-            title: "Periphery".to_string(),
+            title: "Embr".to_string(),
             description: self.tooltip.clone(),
         }
     }
