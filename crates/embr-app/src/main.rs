@@ -28,7 +28,7 @@ slint::include_modules!();
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use embr_core::{WindowClose, window_close_action};
 use slint::{CloseRequestResponse, Model, ModelRc, VecModel};
@@ -40,6 +40,12 @@ use messages::{Command, Notice, UiRequest, UiState, dispatch_note};
 type SharedState = Rc<RefCell<Option<UiState>>>;
 /// The selected device, remembered by its stable key: the list is re-sorted on every pass.
 type Selection = Rc<RefCell<Option<String>>>;
+
+/// The shortest gap between a sweep and another one forced by a device arriving or leaving. A
+/// dongle announces itself as several devices within a few milliseconds and the socket is drained
+/// in one call, so that is a single sweep; this is for the device stuck re-enumerating, which
+/// must not get a sweep per attempt.
+const SETTLE: Duration = Duration::from_secs(2);
 
 /// The last value pushed into every control the user can also move.
 ///
@@ -117,14 +123,13 @@ fn main() -> Result<(), slint::PlatformError> {
     let (notices, notice_queue) = mpsc::channel::<Notice>();
     let (requests, request_queue) = mpsc::channel::<UiRequest>();
 
-    // --- the tray: registered normally, drawn only if Noctalia has it pinned (see README) ---
-    let tray_service =
-        ksni::TrayService::new(tray::EmbrTray::new(commands.clone(), requests.clone()));
-    let tray_handle = tray_service.handle();
-    tray_service.spawn();
-    eprintln!(
-        "[app] StatusNotifierItem registered with id \"embr\" (Noctalia draws it only when pinned)"
-    );
+    // --- the tray: registered normally, drawn only if the bar has the id pinned (see README) ---
+    //
+    // One place owns the set of icons, and both threads hold a clone of it: the device thread
+    // decides *which* icons exist and what they say, the window flips their style the moment the
+    // switch it owns moves. That split is why the switch is instant — a style change must not queue
+    // behind a sweep, which is seconds of HID++ traffic.
+    let tray = tray::Icons::new(commands.clone(), requests.clone());
 
     // --- the threads that are allowed to be slow ---
     match notify::spawn(notice_queue, requests.clone()) {
@@ -133,13 +138,15 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     // The window keeps its own handle so hiding it can say so out loud; the device thread gets
     // a clone of the same sender.
-    match worker::spawn(command_queue, states, notices.clone(), Some(tray_handle)) {
+    match worker::spawn(command_queue, states, notices.clone(), tray.clone()) {
         Ok(_) => {}
         Err(problem) => eprintln!("[app] no device thread: {problem} — the window will stay empty"),
     }
 
     let rows: Rc<VecModel<Device>> = Rc::new(VecModel::default());
     window.set_devices(ModelRc::from(rows.clone()));
+    let choices: Rc<VecModel<TrayChoice>> = Rc::new(VecModel::default());
+    window.set_tray_choices(ModelRc::from(choices.clone()));
     window.set_refreshing(true);
 
     let latest: SharedState = Rc::new(RefCell::new(None));
@@ -149,7 +156,26 @@ fn main() -> Result<(), slint::PlatformError> {
     // the scheduled cadence needs (`core::scheduled_interval` decides what they mean).
     let window_open = Rc::new(Cell::new(true));
     let last_refresh = Rc::new(Cell::new(Instant::now()));
-
+    // The window's own size, in physical pixels, as the backend reports it. Logged when it
+    // changes: whether the app *sees* a resize is the difference between a layout that adapts and
+    // one that draws its opening size inside a bigger frame, and that is not visible in a
+    // screenshot of the frame alone.
+    let last_size = Rc::new(Cell::new((0u32, 0u32)));
+    // How many sweeps in a row could not read every device. `core::next_sweep` turns that into a
+    // shorter interval, so a device that has just been picked up appears in the window within
+    // seconds instead of at the next scheduled sweep.
+    let attempts = Rc::new(Cell::new(0u32));
+    // Device presence, straight from the kernel: a HID device appearing or disappearing is
+    // something the kernel has already seen, and listening costs nothing until it happens — no
+    // polling, and no waking a sleeping device to find out whether it is still asleep. Failing to
+    // open this is not a failure: the app is then exactly what it was before, sweeps on a cadence.
+    let uevents = match embr_core::Uevents::open() {
+        Ok(uevents) => Some(uevents),
+        Err(problem) => {
+            eprintln!("[app] not watching for devices arriving and leaving: {problem}");
+            None
+        }
+    };
     window.on_pick({
         let window = window.as_weak();
         let latest = latest.clone();
@@ -246,6 +272,7 @@ fn main() -> Result<(), slint::PlatformError> {
     window.on_tray_percent_toggled({
         let commands = commands.clone();
         let pushed = pushed.clone();
+        let tray = tray.clone();
         move |enabled| {
             if enabled == pushed.tray_percent.get() {
                 return;
@@ -259,7 +286,30 @@ fn main() -> Result<(), slint::PlatformError> {
                     "a battery"
                 }
             );
+            // The icon's shape is presentation, not a reading: it changes here and now rather
+            // than waiting for the device thread to come back from a sweep, which can take
+            // seconds. Measured before this: 827 ms of delay with a sweep in flight, 18 ms
+            // without.
+            tray.restyle(enabled);
             if commands.send(Command::SetTrayPercent(enabled)).is_err() {
+                eprintln!("[app] the device thread has stopped; the choice was not saved");
+            }
+        }
+    });
+
+    window.on_tray_device_toggled({
+        let commands = commands.clone();
+        move |key, on| {
+            eprintln!(
+                "[app] {} {} an icon of its own",
+                key,
+                if on { "gets" } else { "gives up" }
+            );
+            let command = Command::SetTrayDevice {
+                key: key.to_string(),
+                on,
+            };
+            if commands.send(command).is_err() {
                 eprintln!("[app] the device thread has stopped; the choice was not saved");
             }
         }
@@ -290,8 +340,12 @@ fn main() -> Result<(), slint::PlatformError> {
     window.on_rescan({
         let window = window.as_weak();
         let commands = commands.clone();
+        let attempts = attempts.clone();
         move || {
             eprintln!("[app] rescan asked for");
+            // The user asking restarts the retry sequence: a device they are looking at is worth
+            // asking about in ten seconds, not in the eighty the backoff had reached.
+            attempts.set(0);
             if let Some(window) = window.upgrade() {
                 window.set_refreshing(true);
             }
@@ -412,11 +466,24 @@ fn main() -> Result<(), slint::PlatformError> {
         let commands = commands.clone();
         let window_open = window_open.clone();
         let last_refresh = last_refresh.clone();
+        let last_size = last_size.clone();
+        let attempts = attempts.clone();
+        let choices = choices.clone();
         move || {
             // 1. What the tray or a notification asked the window to do.
             while let Ok(request) = request_queue.try_recv() {
+                // Taken out before the match borrows `request`: an icon that is about one device
+                // opens the window on that device, because the click was about the hardware it
+                // was reporting.
+                let wanted = match &request {
+                    UiRequest::ShowDevice(key) => Some(key.clone()),
+                    _ => None,
+                };
                 match request {
-                    UiRequest::ShowWindow => {
+                    UiRequest::ShowWindow | UiRequest::ShowDevice(_) => {
+                        if let Some(key) = wanted {
+                            *selection.borrow_mut() = Some(key);
+                        }
                         if let Some(window) = window.upgrade() {
                             // The tray's item is called "Show devices", and the notification's
                             // action says the same: whoever asked for the window wants the
@@ -446,28 +513,70 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             // 2. What the device thread has produced since the last tick.
             while let Ok(state) = state_queue.try_recv() {
+                let incomplete = state.snapshot.incomplete();
                 if let Some(window) = window.upgrade() {
-                    apply(&window, &latest, &selection, &rows, &pushed, state);
+                    apply(
+                        &window, &latest, &selection, &rows, &choices, &pushed, state,
+                    );
                 }
+                // A sweep that could not read something is worth repeating soon; one that read
+                // everything starts the count again. `core::next_sweep` decides what the count is
+                // worth — this only counts.
+                attempts.set(if incomplete {
+                    attempts.get().saturating_add(1)
+                } else {
+                    0
+                });
             }
             // 3. Keep the relative ages honest.
             if let Some(window) = window.upgrade() {
                 tick_ages(&window, &latest, &selection, &rows);
             }
 
-            // 4. The sweep the application schedules for itself: the interval the user chose
-            // while the window is open, and a much slower one while it is only a tray icon.
-            // `core::scheduled_interval` decides the number; this only counts.
+            // 3b. Say so when the window's size changes, so that "the layout adapted" and "the
+            // frame grew around a layout stuck at its opening size" can be told apart from the
+            // log instead of from a screenshot of the frame.
+            if let Some(window) = window.upgrade() {
+                let size = window.window().size();
+                let size = (size.width, size.height);
+                if size != last_size.get() {
+                    eprintln!("[app] window {}x{} (physical)", size.0, size.1);
+                    last_size.set(size);
+                }
+            }
+
+            // 3c. Something HID-shaped arrived or left. The kernel said so; the sweep below is
+            // what turns that into a device list.
+            let quiet_enough = last_refresh.get().elapsed() >= SETTLE;
+            let device_changed = quiet_enough
+                && uevents
+                    .as_ref()
+                    .is_some_and(|uevents| uevents.hid_changed());
+            if device_changed {
+                attempts.set(0);
+            }
+
+            // 4. The sweep the application schedules for itself: the interval the user chose while
+            // the window is open, a much slower one while it is only a tray icon, and — while the
+            // window is open — a quick retry after a sweep that could not read something.
+            // `core::next_sweep` decides the number; this only counts.
             let seconds = latest
                 .borrow()
                 .as_ref()
                 .map(|state| state.refresh_seconds)
                 .unwrap_or(60);
-            let interval = embr_core::scheduled_interval(seconds, window_open.get());
-            if last_refresh.get().elapsed() >= interval {
+            let interval = embr_core::next_sweep(seconds, window_open.get(), attempts.get());
+            if device_changed || last_refresh.get().elapsed() >= interval {
                 last_refresh.set(Instant::now());
+                let reason = if device_changed {
+                    "[app] sweeping now: a device arrived or left"
+                } else if attempts.get() > 0 {
+                    "[app] sweeping now: something was not answering"
+                } else {
+                    "[app] scheduled sweep"
+                };
                 eprintln!(
-                    "[app] scheduled sweep ({}s, window {})",
+                    "{reason} ({}s, window {})",
                     interval.as_secs(),
                     if window_open.get() { "open" } else { "closed" }
                 );
@@ -503,6 +612,7 @@ fn apply(
     latest: &SharedState,
     selection: &Selection,
     rows: &Rc<VecModel<Device>>,
+    choices: &Rc<VecModel<TrayChoice>>,
     pushed: &Pushed,
     state: UiState,
 ) {
@@ -530,6 +640,16 @@ fn apply(
             .devices
             .iter()
             .map(view::device)
+            .collect::<Vec<_>>(),
+    );
+
+    // One row per device on the settings page: the devices the user can give an icon of their own.
+    choices.set_vec(
+        state
+            .snapshot
+            .devices
+            .iter()
+            .map(|device| view::tray_choice(device, &state.tray_devices))
             .collect::<Vec<_>>(),
     );
 

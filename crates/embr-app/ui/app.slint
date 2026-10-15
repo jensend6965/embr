@@ -28,6 +28,16 @@ export struct Device {
     error: string,
 }
 
+/// One device as the settings page offers it: a switch that gives it a tray icon of its own.
+export struct TrayChoice {
+    key: string,
+    name: string,
+    /// How it is connected, so two devices with the same name can be told apart.
+    caption: string,
+    /// Whether this device has an icon of its own right now.
+    on: bool,
+}
+
 global Tokens {
     out property <color> bg: #15161a;
     out property <color> surface: #1c1e23;
@@ -342,6 +352,9 @@ component DeviceRow inherits Rectangle {
             }
         }
 
+        // Always here, even in a narrow window: the device list is the only place a device can be
+        // snoozed, so the column has a floor of its own (`min-width` below) instead of dropping
+        // the action when space runs out.
         Button {
             text: "Snooze";
             width: 78px;
@@ -529,11 +542,60 @@ component NumberRow inherits Rectangle {
     }
 }
 
-/// The sentence under a settings row that says what the row above it means.
+/// The sentence under a settings row that says what the row above it means. The rows stretch with
+/// the window; a sentence that did too would be an unreadable 2500 px line, so it stops at a
+/// comfortable measure and stays where the row starts.
 component Caption inherits Text {
     font-size: 10px;
     color: Tokens.text-tertiary;
     wrap: word-wrap;
+    max-width: 1080px;
+}
+
+/// A settings row whose switch belongs to the configuration rather than to the window: it shows
+/// what the last snapshot said, and a click is *reported* instead of being stored here. That is
+/// what lets a row exist per device without the window keeping a copy of the choice.
+component ChoiceRow inherits Rectangle {
+    in property <string> title;
+    in property <string> caption;
+    in property <bool> on: false;
+    callback chosen(bool);
+
+    height: 44px;
+    border-radius: 10px;
+    background: Tokens.surface-raised;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            alignment: center;
+
+            Text {
+                text: root.title;
+                font-size: 13px;
+                color: Tokens.text-primary;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.caption;
+                font-size: 10px;
+                color: Tokens.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        Switch {
+            checked: root.on;
+            toggled => { root.chosen(self.checked); }
+        }
+    }
 }
 
 /// The alert level of the selected device: the one setting in this window that is about one
@@ -604,10 +666,18 @@ export component AppWindow inherits Window {
     // falls back to that system's own default.
     default-font-family: "Noto Sans";
     icon: @image-url("../../../assets/embr.svg");
-    width: 1000px;
+    // The size the window opens at. `preferred-` and not `width:`, deliberately: a plain
+    // `width:` is a binding on the window's size, so it keeps *being* 1000 no matter what the
+    // compositor does with the frame — the frame grows, the layout does not, and the extra space
+    // is painted in the background colour. With a preferred size the window opens there and the
+    // layout follows it wherever it is dragged afterwards.
+    preferred-width: 1000px;
     // Tall enough for the detail card and every settings row, with slack: a `Window` with a
     // fixed height clips whatever does not fit and says nothing about it.
-    height: 660px;
+    preferred-height: 660px;
+    // No `min-width`/`min-height`: one size per axis is all a `Window` accepts, so the floor
+    // cannot sit here as well. It lives in the panes instead (`min-width` on the device list and
+    // the detail pane); below roughly 700 px the two cannot both fit and the detail card clips.
     background: Tokens.bg;
 
     in property <[Device]> devices;
@@ -626,6 +696,8 @@ export component AppWindow inherits Window {
     in-out property <int> alert-level: 20;
     in property <bool> alert-custom: false;
     in-out property <bool> tray-percent: false;
+    /// The devices the settings page offers a tray icon for, one row each.
+    in property <[TrayChoice]> tray-choices: [];
     /// Keep running (tray only) when the window is closed, or quit instead.
     in-out property <bool> close-to-tray: true;
     /// Where the settings on the settings page are written, so the page can say so.
@@ -643,6 +715,8 @@ export component AppWindow inherits Window {
     callback alert-level-changed(int);
     callback alert-level-cleared();
     callback tray-percent-toggled(bool);
+    /// One device asked for (or gave up) its own tray icon.
+    callback tray-device-toggled(string, bool);
     callback close-to-tray-toggled(bool);
     callback refresh-seconds-changed(int);
     callback quit-requested();
@@ -741,9 +815,16 @@ export component AppWindow inherits Window {
             padding-bottom: 18px;
             spacing: 20px;
 
-            // left: the device list
+            // left: the device list. It grows with the window up to the width at which a row's
+            // own content (glyph, name, bar, percentage, Snooze) is comfortable and then stops,
+            // which is what Solaar's tree does. `horizontal-stretch` and not `parent.width`:
+            // reading a layout parent's width here makes the solver size the page from its
+            // children instead of the window, and the whole page stops at the window's opening
+            // width while the window keeps growing around it.
             VerticalLayout {
-                width: 470px;
+                horizontal-stretch: 1;
+                min-width: 380px;
+                max-width: 470px;
                 vertical-stretch: 1;
                 spacing: 10px;
 
@@ -804,9 +885,13 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // right: details, then settings
+            // right: details, then settings. Everything the window gains in width lands here —
+            // the details are what benefits from it, which is also the shape Solaar settles on.
             VerticalLayout {
-                horizontal-stretch: 1;
+                horizontal-stretch: 2;
+                // 380 + 20 + 260 is 660: the pair still fits inside a window 700 px wide, which is
+                // the narrowest this layout is honest at (below it the card's right edge clips).
+                min-width: 260px;
                 vertical-stretch: 1;
                 spacing: 16px;
 
@@ -937,6 +1022,9 @@ export component AppWindow inherits Window {
         // The devices page is about what the hardware is doing; this one is about the app.
         // Scrolled rather than stretched, so a setting added later pushes the page down instead
         // of pushing rows out of the window.
+        // Full width on purpose. A row here is a label at the left and its control at the far
+        // right, so the pane uses whatever width the window has rather than sitting in a fixed
+        // column in the middle of it — the shape Solaar has when it is maximised.
         if root.view == 1: HorizontalLayout {
             padding-left: 20px;
             padding-right: 20px;
@@ -944,10 +1032,8 @@ export component AppWindow inherits Window {
             padding-bottom: 18px;
             spacing: 0;
 
-            Rectangle { horizontal-stretch: 1; }
-
             VerticalLayout {
-                width: 640px;
+                horizontal-stretch: 1;
                 vertical-stretch: 1;
 
                 ScrollView {
@@ -1004,7 +1090,18 @@ export component AppWindow inherits Window {
                         }
 
                         Caption {
-                            text: "Embr registers its tray item as “embr”: some bars draw only the items they have pinned. Closing the window is the fastest way to a tray-only app.";
+                            text: "Some bars draw only the tray items they have pinned, and these register as “embr” and “embr-<device>”: pin the ones you want to see. Closing the window is the fastest way to a tray-only app.";
+                        }
+
+                        for choice in root.tray-choices: ChoiceRow {
+                            title: choice.name;
+                            caption: choice.caption;
+                            on: choice.on;
+                            chosen(v) => { root.tray-device-toggled(choice.key, v); }
+                        }
+
+                        if root.tray-choices.length == 0: Caption {
+                            text: "No devices found yet. Each device gets a switch here as soon as one answers.";
                         }
 
                         SectionLabel { text: "APPLICATION"; }
@@ -1040,8 +1137,6 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-
-            Rectangle { horizontal-stretch: 1; }
         }
     }
 }

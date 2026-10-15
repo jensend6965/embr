@@ -26,6 +26,8 @@ pub enum Command {
     SetDeviceAlertLevel { key: String, level: Option<u8> },
     /// Draw the worst battery as a number in the tray icon, or as the battery glyph.
     SetTrayPercent(bool),
+    /// Give one device a tray icon of its own, or take it away again.
+    SetTrayDevice { key: String, on: bool },
     /// Keep running when the window is closed (tray only), or quit instead.
     SetCloseToTray(bool),
     /// How often a fresh reading is taken while the window is open.
@@ -40,6 +42,9 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiRequest {
     ShowWindow,
+    /// Show the window on one particular device — what clicking an icon that is about a device
+    /// means.
+    ShowDevice(String),
     Quit,
 }
 
@@ -55,6 +60,8 @@ pub struct UiState {
     pub thresholds_text: String,
     pub refresh_seconds: u64,
     pub tray_shows_percent: bool,
+    /// The devices the user gave a tray icon of their own, by key.
+    pub tray_devices: Vec<String>,
     pub close_to_tray: bool,
     /// Where the settings on the settings page are written, so the page can say so.
     pub config_path: String,

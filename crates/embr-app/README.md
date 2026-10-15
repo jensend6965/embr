@@ -33,6 +33,30 @@ it — see the repository README for the install steps.
   sweep: it reads everything now and gives the devices that have not answered yet the longer
   waits (`Patience::Asked`) that a device coming back from sleep needs, so a row that said *Not
   answering* can turn into a reading instead of waiting for the next interval.
+* **It uses the width it is given.** The window opens at 1000×660 (`preferred-width`/
+  `preferred-height`, not `width`/`height` — a plain `width:` is a binding on the window's size, so
+  the frame can grow while the layout stays at its opening width and the extra space is painted in
+  the background colour) and the layout is written in terms of the space it has, so dragging it
+  wider moves the panes. The device list grows to 470 px and stops, the detail card takes
+  everything else, and the settings page runs its rows the full width with each control at the far
+  right — the shape Solaar has when maximised. Two floors keep it honest: the list needs 380 px for
+  a row's own content and the card 260 px for its tiles and the alert row, so below about 700 px
+  they cannot both fit. The window's own size is logged when it changes
+  (`[app] window 1646x960 (physical)`), which is the only way to tell "the layout adapted" from
+  "the frame grew around a layout that did not".
+* **Notices a device arriving or leaving by itself.** `embr-hidpp::Uevents` listens on the kernel's
+  uevent group — a netlink socket any user may bind to, so there is no daemon to install, no
+  `libudev` linkage and no helper process — and the UI thread drains it on every tick. A paired
+  device waking up, a receiver being plugged in, a headset being unplugged: the kernel has already
+  seen it, and the sweep that follows is the same sweep the schedule would have run. This is
+  deliberately *not* polling the hardware to ask whether anything changed: on a wireless device
+  every such question is a wake-up, and a battery monitor that spends the batteries is a bad one.
+* **And asks again soon about a device that did not answer.** A sleeping device has not gone
+  anywhere, so a sweep that could not read everything is repeated after ten seconds, then twenty,
+  forty, eighty (`core::retry_interval`) — while the window is open, because that is when somebody
+  is looking at it. With the window closed the two-minute floor stands and the uevent above is
+  what catches a device really coming back; there is no point in waking a sleeping device every
+  ten seconds to redraw a tooltip nobody is reading.
 * **Between sweeps it holds no device open.** `Monitor::refresh_with()` opens what each query
   needs and closes it again before returning.
 * **Snooze** on every row calls `Monitor::snooze(device.key)`; the *Battery notifications*
@@ -51,18 +75,27 @@ it — see the repository README for the install steps.
   this reason — `run_event_loop()` returns when the last window is hidden, because it counts
   windows and Slint's own tray icon, and this app's tray item belongs to `ksni` on another thread.
   With the option off, the close button quits.
-* **Tray icon**: tooltip = `Snapshot::tray_tooltip()`; the pictogram is the worst battery, drawn in
-  code as a 22×22 ARGB32 pixmap — a battery, or the level itself as digits when *Tray icon shows
-  the level* is on. Left-click shows the window (and switches it back to the devices page);
-  a *Devices* submenu with one entry per device (`NAME — 88% (Discharging)`), plus *Rescan* and
+* **Tray icons**: the tooltip is `Snapshot::tray_tooltip()`, and the pictograms are drawn in code as
+  22×22 ARGB32 pixmaps — a battery, or a level as digits when *Tray icon shows the level* is on.
+  Which icons exist is `core::tray_icons`: nothing chosen means one icon that follows the worst
+  device, and a device the user picked in Settings gets one of its own, each about that device.
+  They register as `embr` and `embr-<device key>`, so a bar that draws only what it has pinned
+  (Noctalia) needs each id added. Left-click shows the window — on that device, for an icon that is
+  about one — a *Devices* submenu lists every device (`NAME — 88% (Discharging)`), plus *Rescan* and
   *Quit*.
+* **The icon set is shared between two threads, deliberately.** `tray::Icons` is held by the device
+  thread (which decides which icons exist and what they say) *and* by the window, which flips their
+  style the moment the switch moves. Routing a style change through the device thread made the
+  switch wait out whatever sweep was in flight — measured at 827 ms with a rescan running, against
+  29 ms once the window applies it itself. A presentation change has no business queueing behind
+  device I/O.
 * The **About** window shows the Slint `AboutSlint` widget, which the Slint licence requires.
 
 ### Threads
 
 | Thread | Owns | Never does |
 | --- | --- | --- |
-| UI (main) | everything Slint | open a device, talk to D-Bus |
+| UI (main) | everything Slint, and the tray icons' *style* | open a device, read a battery |
 | `devices` | `core::Monitor`, the HID++ work | touch a Slint object |
 | `notifications` | D-Bus (`notify-rust`) | touch the window |
 | tray (`ksni`) | the StatusNotifierItem | block the UI thread |

@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use embr_core::{DeviceView, human_age};
 
-use crate::Device;
+use crate::{Device, TrayChoice};
 
 /// A stand-in for "nothing selected": Slint has no `Option<Device>` for a property.
 pub fn nothing() -> Device {
@@ -46,6 +46,20 @@ pub fn device(view: &DeviceView) -> Device {
         alert_below: i32::from(view.alert_below_effective),
         alert_below_custom: view.alert_below.is_some(),
         error: view.error.clone().unwrap_or_default().into(),
+    }
+}
+
+/// One device, as the settings page offers it: a switch that gives it a tray icon of its own.
+///
+/// The switch reads its state from the configuration rather than from the widget, so a device that
+/// was chosen in an earlier run comes back chosen, and the row is rebuilt from the snapshot every
+/// time anyway.
+pub fn tray_choice(view: &DeviceView, chosen: &[String]) -> TrayChoice {
+    TrayChoice {
+        key: view.key.clone().into(),
+        name: view.name.clone().into(),
+        caption: view.connection.clone().into(),
+        on: chosen.iter().any(|key| key == &view.key),
     }
 }
 

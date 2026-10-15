@@ -11,11 +11,10 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::Instant;
 
+use crate::tray::Icons;
 use embr_core::{Alert, Monitor, Patience, default_path};
-use ksni::Handle;
 
 use crate::messages::{Command, Notice, UiState, dispatch_alert, thresholds_text};
-use crate::tray::EmbrTray;
 
 /// A hidden switch, for proving the notification path while notifications are off (the
 /// default): `EMBR_DEBUG_ALERT=1 embr` sends one synthetic low-battery alert
@@ -26,7 +25,7 @@ pub struct DeviceWorker {
     monitor: Monitor,
     states: Sender<UiState>,
     alerts: Sender<Notice>,
-    tray: Option<Handle<EmbrTray>>,
+    tray: Icons,
     debug_alert: bool,
 }
 
@@ -36,7 +35,7 @@ pub fn spawn(
     commands: Receiver<Command>,
     states: Sender<UiState>,
     alerts: Sender<Notice>,
-    tray: Option<Handle<EmbrTray>>,
+    tray: Icons,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     let worker = DeviceWorker {
         monitor: Monitor::from_disk(),
@@ -154,6 +153,19 @@ impl DeviceWorker {
                         }
                         settings_changed = true;
                     }
+                    Command::SetTrayDevice { key, on } => {
+                        match self.monitor.set_tray_device(&key, on) {
+                            Ok(()) => eprintln!(
+                                "[devices] {} {} a tray icon of its own",
+                                self.name_of(&key),
+                                if on { "gets" } else { "gives up" }
+                            ),
+                            Err(problem) => eprintln!(
+                                "[devices] the choice was applied but not saved: {problem}"
+                            ),
+                        }
+                        settings_changed = true;
+                    }
                     Command::SetCloseToTray(enabled) => {
                         match self.monitor.set_close_to_tray(enabled) {
                             Ok(()) => eprintln!(
@@ -261,6 +273,7 @@ impl DeviceWorker {
             thresholds_text: thresholds_text(&config.notifications.thresholds),
             refresh_seconds: config.general.refresh_seconds,
             tray_shows_percent: config.ui.tray_shows_percent,
+            tray_devices: config.ui.tray_devices.clone(),
             close_to_tray: config.general.close_to_tray,
             config_path: default_path().display().to_string(),
             notice: self.monitor.notices.first().cloned(),
@@ -271,10 +284,16 @@ impl DeviceWorker {
     }
 
     fn update_tray(&self) {
-        let Some(tray) = &self.tray else { return };
+        let config = self.monitor.config();
         let snapshot = self.monitor.snapshot();
-        let shows_percent = self.monitor.config().ui.tray_shows_percent;
-        tray.update(|item| item.observe(snapshot, shows_percent));
+        // Which icons should exist is `core`'s decision (nothing chosen means one icon for the
+        // worst device); the set itself is this call's business.
+        let wanted = embr_core::tray_icons(snapshot, &config.ui.tray_devices);
+        self.tray.sync(
+            &wanted,
+            &crate::tray::labels(snapshot),
+            config.ui.tray_shows_percent,
+        );
     }
 
     fn name_of(&self, key: &str) -> String {

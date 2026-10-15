@@ -1,25 +1,34 @@
-//! The StatusNotifierItem: tooltip, left-click and the device submenu.
+//! The StatusNotifierItems: one per icon, with their tooltips, click handling and device submenu.
+//!
+//! ## One icon, or several
+//!
+//! The user may ask for an icon per device (the settings page lists them), in which case each
+//! registered item is about one device and shows *its* level — the shape a monitoring overlay has
+//! when it puts a readout per sensor on screen. With nothing chosen there is one icon, and it
+//! follows the device with the least charge. Which icons should exist is decided in
+//! [`embr_core::tray_icons`]; this module only draws them and keeps the live set in step.
 //!
 //! ## The Noctalia caveat
 //!
-//! This is a plain, correct SNI item: it takes its own well-known bus name
-//! (`org.kde.StatusNotifierItem-<pid>-<n>`) and registers with
-//! `org.kde.StatusNotifierWatcher`. On this desktop (KineticWE / the Noctalia shell) that is
-//! *registered but not drawn*: `[widget.tray] pinned` in
-//! `~/.config/noctalia-kwe/noctalia-config.toml` lists the application ids the bar draws, and
-//! anything else lands in the hover-only drawer. Nothing here works around that, because the
-//! workaround would be to impersonate another application's id. See the crate README for the
-//! one line a user adds.
+//! These are plain, correct SNI items: each takes its own well-known bus name
+//! (`org.kde.StatusNotifierItem-<pid>-<n>`) and registers with `org.kde.StatusNotifierWatcher`. On
+//! this desktop (KineticWE / the Noctalia shell) that is *registered but not drawn*: `[widget.tray]`
+//! `pinned` in `~/.config/noctalia-kwe/noctalia-config.toml` lists the application ids the bar
+//! draws, and anything else lands in the hover-only drawer. An icon per device therefore needs each
+//! id pinned — `embr` for the one that follows the worst device, `embr-<device key>` for the rest.
+//! Nothing here works around that, because the workaround would be to impersonate another
+//! application's id. See the crate README for the lines a user adds.
 
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
-use embr_core::Snapshot;
+use embr_core::{Snapshot, TrayIcon};
 use ksni::menu::{MenuItem, StandardItem, SubMenu};
-use ksni::{Icon, ToolTip, Tray};
+use ksni::{Handle, Icon, ToolTip, Tray};
 
 use crate::messages::{Command, UiRequest};
 
-/// Toolbar pictogram: a battery body with the usual nub, coloured by the worst device.
+/// Toolbar pictogram: a battery body with the usual nub, coloured by the level it was given.
 const ICON_SIDE: i32 = 22;
 
 /// The 3×5 bitmap of each digit, top row first, leftmost column the high bit. Hand-drawn for
@@ -39,36 +48,56 @@ const DIGITS: [[u8; 5]; 10] = [
 const DIGIT_WIDTH: i32 = 3;
 const DIGIT_HEIGHT: i32 = 5;
 
+/// One tray icon.
 pub struct EmbrTray {
-    /// `Snapshot::tray_tooltip()` — every device with its level, one per line.
-    pub tooltip: String,
-    /// One row per device, exactly as the tooltip writes them.
-    pub devices: Vec<String>,
-    /// The worst level on the machine, for the icon colour.
-    pub level: Option<u8>,
+    /// The StatusNotifierItem id, from [`TrayIcon::id`]: the bar draws an item only if this exact
+    /// string is pinned.
+    id: String,
+    /// The device this icon is about, if it is about one.
+    key: Option<String>,
+    /// The tooltip's title: the app's name, or the device's when the icon is that device's.
+    title: String,
+    /// The tooltip's body.
+    tooltip: String,
+    /// The level to draw: this icon's own device, or the worst one.
+    level: Option<u8>,
     /// Draw that level as a number in the icon instead of as a battery.
-    pub shows_percent: bool,
+    shows_percent: bool,
+    /// Every device, for the menu.
+    devices: Vec<String>,
     commands: Sender<Command>,
     ui: Sender<UiRequest>,
 }
 
 impl EmbrTray {
-    pub fn new(commands: Sender<Command>, ui: Sender<UiRequest>) -> Self {
+    pub fn new(id: String, commands: Sender<Command>, ui: Sender<UiRequest>) -> Self {
         Self {
+            id,
+            key: None,
+            title: "Embr".to_string(),
             tooltip: "No Logitech devices found".to_string(),
-            devices: Vec::new(),
             level: None,
             shows_percent: false,
+            devices: Vec::new(),
             commands,
             ui,
         }
     }
 
-    /// Take the latest snapshot into the item. Called from the device thread only.
-    pub fn observe(&mut self, snapshot: &Snapshot, shows_percent: bool) {
-        self.tooltip = snapshot.tray_tooltip();
-        self.devices = labels(snapshot);
-        self.level = snapshot.lowest().and_then(|device| device.percent);
+    /// Take the latest reading for this icon. Called from the device thread only.
+    pub fn observe(&mut self, icon: &TrayIcon, devices: &[String], shows_percent: bool) {
+        self.key = icon.key.clone();
+        self.title = icon.title.clone();
+        self.tooltip = icon.detail.clone();
+        self.level = icon.level;
+        self.shows_percent = shows_percent;
+        self.devices = devices.to_vec();
+    }
+
+    /// The icon's style, which is presentation and not a reading: the window sets this the moment
+    /// the switch moves rather than waiting for the device thread, which may be seconds into a
+    /// sweep. See [`Icons::restyle`].
+    pub fn set_style(&mut self, shows_percent: bool) {
         self.shows_percent = shows_percent;
     }
 
@@ -83,7 +112,13 @@ impl EmbrTray {
     }
 
     fn show_window(&self) {
-        if self.ui.send(UiRequest::ShowWindow).is_err() {
+        // An icon that is about one device is a click on that device: the window opens on the
+        // hardware the icon was reporting, not on whatever was selected last.
+        let request = match &self.key {
+            Some(key) => UiRequest::ShowDevice(key.clone()),
+            None => UiRequest::ShowWindow,
+        };
+        if self.ui.send(request).is_err() {
             eprintln!("[tray] the window is gone; nothing to show");
         }
     }
@@ -93,6 +128,88 @@ impl EmbrTray {
         // follows gives a device that has not answered yet the longer waits.
         if self.commands.send(Command::Rescan).is_err() {
             eprintln!("[tray] the device thread has stopped; cannot rescan");
+        }
+    }
+}
+
+/// One live icon: the id it registered as, and the handle that updates it.
+type Live = (String, Handle<EmbrTray>);
+
+/// The tray icons that are live right now.
+///
+/// Shared between the two threads that have something to say about them: the device thread feeds
+/// them readings and keeps the set in step with the configuration, and the window flips their
+/// *style* the moment the switch moves. That split is deliberate — a style change has nothing to
+/// do with the devices, and routing it through the device thread meant waiting out whatever sweep
+/// was in flight (measured: 827 ms when one was running, 18 ms when it was not).
+#[derive(Clone)]
+pub struct Icons {
+    live: Arc<Mutex<Vec<Live>>>,
+    commands: Sender<Command>,
+    ui: Sender<UiRequest>,
+}
+
+impl Icons {
+    /// The senders are kept here rather than passed on every call: this is the one place that makes
+    /// tray items, and an item needs a way to ask for a rescan and a way to show the window.
+    pub fn new(commands: Sender<Command>, ui: Sender<UiRequest>) -> Self {
+        Self {
+            live: Arc::new(Mutex::new(Vec::new())),
+            commands,
+            ui,
+        }
+    }
+
+    /// Make the live icons match what the configuration asks for.
+    ///
+    /// Called from the device thread, which is what holds readings. An icon that is no longer
+    /// asked for is shut down — its name comes off the bus and the bar forgets it — and an icon
+    /// that is new is registered there and then, so a choice on the settings page takes effect
+    /// without a restart.
+    pub fn sync(&self, wanted: &[TrayIcon], menu: &[String], shows_percent: bool) {
+        let mut live = self
+            .live
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let wanted_ids: Vec<String> = wanted.iter().map(TrayIcon::id).collect();
+        live.retain(|(id, handle)| {
+            let still_wanted = wanted_ids.contains(id);
+            if !still_wanted {
+                eprintln!("[tray] \"{id}\" is no longer asked for: its icon is gone from the bar");
+                handle.shutdown();
+            }
+            still_wanted
+        });
+
+        for icon in wanted {
+            let id = icon.id();
+            match live.iter().find(|(live_id, _)| *live_id == id) {
+                Some((_, handle)) => handle.update(|item| item.observe(icon, menu, shows_percent)),
+                None => {
+                    let mut item =
+                        EmbrTray::new(id.clone(), self.commands.clone(), self.ui.clone());
+                    item.observe(icon, menu, shows_percent);
+                    let service = ksni::TrayService::new(item);
+                    let handle = service.handle();
+                    // ksni runs each item on its own thread, and unwraps its own registration
+                    // there: a bar that refuses the item loses that icon, not the application.
+                    service.spawn();
+                    eprintln!("[tray] registered the icon \"{id}\" (pin it in your bar to see it)");
+                    live.push((id.clone(), handle));
+                }
+            }
+        }
+    }
+
+    /// The style, straight from the UI thread: the switch the user just moved, applied to every
+    /// icon at once. Readings and the set of icons stay the device thread's business.
+    pub fn restyle(&self, shows_percent: bool) {
+        let live = self
+            .live
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (_, handle) in live.iter() {
+            handle.update(|item| item.set_style(shows_percent));
         }
     }
 }
@@ -114,11 +231,11 @@ pub fn labels(snapshot: &Snapshot) -> Vec<String> {
 impl Tray for EmbrTray {
     /// The application id. Noctalia draws an item only when this exact string is pinned.
     fn id(&self) -> String {
-        "embr".to_string()
+        self.id.clone()
     }
 
     fn title(&self) -> String {
-        "Embr".to_string()
+        self.title.clone()
     }
 
     fn category(&self) -> ksni::Category {
@@ -143,7 +260,7 @@ impl Tray for EmbrTray {
         ToolTip {
             icon_name: String::new(),
             icon_pixmap: vec![self.pictogram()],
-            title: "Embr".to_string(),
+            title: self.title.clone(),
             description: self.tooltip.clone(),
         }
     }
@@ -364,10 +481,10 @@ mod tests {
     use super::*;
     use embr_core::DeviceView;
 
-    fn view(percent: Option<u8>) -> DeviceView {
+    fn view(key: &str, percent: Option<u8>) -> DeviceView {
         DeviceView {
-            key: "g703".to_string(),
-            name: "G703 LIGHTSPEED".to_string(),
+            key: key.to_string(),
+            name: format!("G703 {key}"),
             kind: "Mouse".to_string(),
             connection: "USB".to_string(),
             percent,
@@ -412,8 +529,14 @@ mod tests {
     fn tray(level: Option<u8>, shows_percent: bool) -> EmbrTray {
         let (commands, _) = std::sync::mpsc::channel();
         let (ui, _) = std::sync::mpsc::channel();
-        let mut tray = EmbrTray::new(commands, ui);
-        tray.observe(&snapshot(vec![view(level)]), shows_percent);
+        let mut tray = EmbrTray::new("embr".to_string(), commands, ui);
+        let icon = TrayIcon {
+            key: None,
+            title: "Embr".to_string(),
+            detail: String::new(),
+            level,
+        };
+        tray.observe(&icon, &[], shows_percent);
         tray
     }
 
@@ -480,15 +603,53 @@ mod tests {
     }
 
     #[test]
-    fn the_icon_takes_the_worst_level_on_the_machine() {
+    fn the_style_can_be_changed_without_a_reading() {
+        // This is what the settings switch does, on the UI thread: the next snapshot does not have
+        // to arrive for the icon to change shape, and it does not need a new level either.
+        let mut item = tray(Some(64), false);
+        assert_eq!(item.pictogram().data, battery_icon(Some(64)).data);
+        item.set_style(true);
+        assert_eq!(item.pictogram().data, percent_icon(64).data);
+    }
+
+    #[test]
+    fn each_icon_draws_the_device_it_is_about() {
         let (commands, _) = std::sync::mpsc::channel();
         let (ui, _) = std::sync::mpsc::channel();
-        let mut tray = EmbrTray::new(commands, ui);
-        tray.observe(
-            &snapshot(vec![view(Some(88)), view(Some(19)), view(None)]),
-            true,
+        let mut item = EmbrTray::new("embr-hidraw8".to_string(), commands, ui);
+
+        let snapshot = snapshot(vec![
+            view("hidraw7", Some(92)),
+            view("hidraw8", Some(19)),
+            view("hidraw0", None),
+        ]);
+        let icons = embr_core::tray_icons(&snapshot, &["hidraw8".to_string()]);
+        item.observe(&icons[0], &labels(&snapshot), true);
+
+        assert_eq!(item.id, "embr-hidraw8", "the id is what a bar pins");
+        assert_eq!(
+            item.pictogram().data,
+            percent_icon(19).data,
+            "this icon is the mouse, not the worst device on the machine"
         );
-        assert_eq!(tray.level, Some(19));
-        assert_eq!(tray.pictogram().data, percent_icon(19).data);
+        assert!(
+            item.tooltip.contains("G703 hidraw8"),
+            "the tooltip names it: {}",
+            item.tooltip
+        );
+    }
+
+    #[test]
+    fn the_default_icon_still_follows_the_worst_device() {
+        let (commands, _) = std::sync::mpsc::channel();
+        let (ui, _) = std::sync::mpsc::channel();
+        let mut item = EmbrTray::new("embr".to_string(), commands, ui);
+
+        let snapshot = snapshot(vec![view("hidraw7", Some(88)), view("hidraw8", Some(19))]);
+        let icons = embr_core::tray_icons(&snapshot, &[]);
+        item.observe(&icons[0], &labels(&snapshot), true);
+
+        assert_eq!(item.id, "embr");
+        assert_eq!(item.pictogram().data, percent_icon(19).data);
     }
 }
