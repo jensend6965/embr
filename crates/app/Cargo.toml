@@ -1,0 +1,23 @@
+[package]
+name = "periphery"
+description = "The desktop app: device list, battery bars, settings, tray icon and notifications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "periphery"
+path = "src/main.rs"
+
+[dependencies]
+# `package = "core"` keeps the crate's real name; the *extern* name has to differ because a
+# dependency called `core` shadows the sysroot crate of that name, and Slint's generated code
+# refers to `::core::default::Default` and `::core::result::Result` by absolute path. With the
+# dependency named `core` those 1200 lines resolve to this workspace's crate and fail to build.
+logi-core = { path = "../core", package = "core" }
+slint.workspace = true
+ksni.workspace = true
+notify-rust.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true

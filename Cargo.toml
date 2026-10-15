@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = ["crates/hidpp", "crates/core", "crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Jensen"]
+# Licence is still open (see README §Licence). Nothing is published yet.
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "2"
+# The window. Slint is what the spike measured best (look, startup, tray/i18n/a11y built in);
+# its licence is the open question recorded in the README, not a build problem.
+slint = "1.18"
+slint-build = "1.18"
+# Tray item and desktop notifications: both proven on this desktop by spike 003.
+ksni = "0.2"
+notify-rust = "4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+# HID++ work is I/O bound; a debug build that is not absurdly slow is worth more than
+# maximum debuggability for a device monitor.
+opt-level = 1

@@ -1,0 +1,726 @@
+// Periphery — the main window.
+//
+// The look is the one the spike settled on: dark palette tokens, rounded cards, stat tiles,
+// real std-widgets, battery bars. This file draws and raises callbacks; it decides nothing.
+// Every string that needs judgement (headlines, ages, percentages with their `~`) is
+// computed in Rust by `core` and handed in as a property.
+
+import { Palette, ScrollView, Switch, Button, AboutSlint } from "std-widgets.slint";
+
+export struct Device {
+    key: string,
+    icon: string,
+    name: string,
+    kind: string,
+    connection: string,
+    /// -1 when the device reported no level at all.
+    percent: int,
+    /// `88%`, `~88%` (estimated) or `—`.
+    percent-text: string,
+    has-percent: bool,
+    millivolts: int,
+    status: string,
+    attention: bool,
+    updated: string,
+    error: string,
+}
+
+global Tokens {
+    out property <color> bg: #15161a;
+    out property <color> surface: #1c1e23;
+    out property <color> surface-raised: #23262c;
+    out property <color> track: #303439;
+    out property <color> border-subtle: #2b2f36;
+    out property <color> text-primary: #e7e9ec;
+    out property <color> text-secondary: #9ba1a9;
+    out property <color> text-tertiary: #6c737c;
+    out property <color> accent: #5aa9f7;
+    out property <color> green: #3ddc97;
+    out property <color> amber: #f4c150;
+    out property <color> red: #f2726f;
+    out property <color> blue: #6aa8ff;
+    /// Muted red, for a row that wants attention: a tint of the surface, not a shout.
+    out property <color> alert-surface: #291d1f;
+    out property <color> alert-surface-raised: #332325;
+
+    /// Receiver families are told apart by colour, as in the spike.
+    public pure function conn-color(c: string) -> color {
+        if (c.starts-with("Lightspeed")) { return blue; }
+        if (c.starts-with("Bolt")) { return green; }
+        if (c == "USB" || c == "Bluetooth") { return accent; }
+        return text-secondary;
+    }
+
+    public pure function status-color(s: string) -> color {
+        if (s == "Discharging") { return amber; }
+        if (s == "Charging" || s == "Slow charging" || s == "Almost full" || s == "Full") { return green; }
+        if (s == "Battery fault" || s == "Thermal fault") { return red; }
+        return text-tertiary;
+    }
+
+    public pure function bar-color(has-percent: bool, s: string, p: int) -> color {
+        if (!has-percent) { return track; }
+        if (s == "Battery fault" || s == "Thermal fault") { return red; }
+        if (p <= 20) { return red; }
+        if (p <= 30) { return amber; }
+        if (s == "Charging" || s == "Slow charging" || s == "Almost full" || s == "Full") { return blue; }
+        return green;
+    }
+}
+
+component Badge inherits Rectangle {
+    in property <string> label;
+    in property <color> tint: Tokens.text-secondary;
+
+    height: 20px;
+    width: badge-text.preferred-width + 16px;
+    border-radius: 10px;
+    background: tint.with-alpha(0.14);
+    border-width: 1px;
+    border-color: tint.with-alpha(0.28);
+
+    badge-text := Text {
+        text: label;
+        font-size: 10px;
+        font-weight: 700;
+        color: tint;
+        letter-spacing: 0.4px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+        width: 100%;
+    }
+}
+
+component BatteryBar inherits Rectangle {
+    in property <int> percent;
+    in property <color> fill-color: Tokens.green;
+
+    height: 6px;
+    border-radius: 3px;
+    background: Tokens.track;
+
+    Rectangle {
+        width: max(0px, parent.width * percent / 100);
+        height: parent.height;
+        border-radius: 3px;
+        background: fill-color;
+    }
+}
+
+component DeviceRow inherits Rectangle {
+    in property <Device> device;
+    in property <bool> is-selected: false;
+    callback pick;
+    callback snooze;
+
+    height: 96px;
+    border-radius: 12px;
+    background: device.attention
+        ? (is-selected ? Tokens.alert-surface-raised : Tokens.alert-surface)
+        : (is-selected ? Tokens.surface-raised : Tokens.surface);
+    border-width: 1px;
+    border-color: device.attention
+        ? Tokens.red.with-alpha(0.35)
+        : (is-selected ? Tokens.accent.with-alpha(0.55) : Tokens.border-subtle);
+    animate background, border-color { duration: 120ms; }
+
+    // Declared before the content so the Snooze button keeps its own clicks.
+    row-click := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.pick(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 14px;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: 42px;
+            height: 42px;
+            border-radius: 11px;
+            background: Tokens.conn-color(device.connection).with-alpha(0.13);
+            border-width: 1px;
+            border-color: Tokens.conn-color(device.connection).with-alpha(0.25);
+
+            Text {
+                text: device.icon;
+                font-size: 16px;
+                font-weight: 700;
+                color: Tokens.conn-color(device.connection);
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 6px;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                Text {
+                    text: device.name;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Tokens.text-primary;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                Badge {
+                    label: device.connection;
+                    tint: Tokens.conn-color(device.connection);
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+
+                BatteryBar {
+                    horizontal-stretch: 1;
+                    percent: max(0, device.percent);
+                    fill-color: Tokens.bar-color(device.has-percent, device.status, device.percent);
+                }
+
+                Text {
+                    text: device.percent-text;
+                    width: 52px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: device.attention ? Tokens.red : Tokens.text-secondary;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                cross-axis-alignment: center;
+
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Tokens.status-color(device.status);
+                }
+
+                Text {
+                    text: device.status;
+                    font-size: 12px;
+                    color: Tokens.status-color(device.status);
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: device.kind;
+                    font-size: 12px;
+                    color: Tokens.text-tertiary;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Text {
+                    text: device.updated;
+                    font-size: 11px;
+                    color: Tokens.text-tertiary;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Button {
+            text: "Snooze";
+            width: 78px;
+            height: 28px;
+            clicked => { root.snooze(); }
+        }
+    }
+}
+
+component StatTile inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <color> value-color: Tokens.text-primary;
+
+    height: 60px;
+    horizontal-stretch: 1;
+    border-radius: 10px;
+    background: Tokens.surface-raised;
+    border-width: 1px;
+    border-color: Tokens.border-subtle;
+
+    VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        spacing: 3px;
+        alignment: center;
+
+        Text {
+            text: label;
+            font-size: 10px;
+            font-weight: 600;
+            color: Tokens.text-tertiary;
+            letter-spacing: 0.5px;
+        }
+
+        Text {
+            text: value;
+            font-size: 15px;
+            font-weight: 600;
+            color: value-color;
+            overflow: elide;
+        }
+    }
+}
+
+component DetailLine inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+
+    height: 26px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        Text {
+            text: label;
+            width: 108px;
+            font-size: 12px;
+            color: Tokens.text-tertiary;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: value;
+            font-size: 12px;
+            color: Tokens.text-primary;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <bool> with-switch: false;
+    in-out property <bool> toggled: false;
+    callback changed(bool);
+
+    height: 44px;
+    border-radius: 10px;
+    background: Tokens.surface-raised;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        Text {
+            text: title;
+            font-size: 13px;
+            color: Tokens.text-primary;
+            vertical-alignment: center;
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        if with-switch: Switch {
+            checked <=> root.toggled;
+            toggled => { root.changed(self.checked); }
+        }
+
+        if !with-switch: Text {
+            text: value;
+            font-size: 13px;
+            color: Tokens.text-secondary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Periphery — Logitech devices";
+    width: 1000px;
+    height: 640px;
+    background: Tokens.bg;
+
+    in property <[Device]> devices;
+    in-out property <Device> selected;
+    in property <bool> has-devices: false;
+    in property <string> headline: "";
+    in property <string> last-updated: "";
+    in property <string> last-updated-label: "";
+    in property <bool> refreshing: false;
+    in-out property <bool> notifications-enabled: false;
+    in property <string> thresholds-text: "";
+    /// Seconds between sweeps. Rust clamps this to >= 5 before it lands here.
+    in property <int> refresh-seconds: 60;
+    in property <string> notice: "";
+    in-out property <int> selected-index: -1;
+
+    callback tick();
+    callback request-refresh();
+    callback pick(int);
+    callback snooze(string);
+    callback notifications-toggled(bool);
+    callback show-about();
+
+    // Drains whatever the device worker collected, and keeps the relative ages fresh.
+    Timer {
+        interval: 500ms;
+        running: true;
+        triggered => { root.tick(); }
+    }
+
+    // The refresh cadence comes from the configuration. The `max` is the second half of the
+    // clamp Rust applies, so a hand-edited `refresh_seconds = 0` cannot spin this timer.
+    Timer {
+        interval: max(5, root.refresh-seconds) * 1s;
+        running: true;
+        triggered => { root.request-refresh(); }
+    }
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    VerticalLayout {
+        // ---- header ----
+        HorizontalLayout {
+            height: 66px;
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 14px;
+            cross-axis-alignment: center;
+
+            Text {
+                text: "Periphery";
+                font-size: 20px;
+                font-weight: 700;
+                color: Tokens.text-primary;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: root.headline;
+                font-size: 13px;
+                color: Tokens.text-secondary;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            Text {
+                text: root.last-updated;
+                font-size: 12px;
+                color: Tokens.text-tertiary;
+                vertical-alignment: center;
+            }
+
+            Button {
+                text: root.refreshing ? "Refreshing…" : "Refresh";
+                width: 116px;
+                height: 30px;
+                clicked => { root.request-refresh(); }
+            }
+
+            Button {
+                text: "About";
+                width: 84px;
+                height: 30px;
+                clicked => { root.show-about(); }
+            }
+        }
+
+        Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+        // ---- body ----
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 18px;
+            padding-bottom: 18px;
+            spacing: 20px;
+
+            // left: the device list
+            VerticalLayout {
+                width: 470px;
+                vertical-stretch: 1;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    height: 18px;
+                    cross-axis-alignment: center;
+
+                    Text {
+                        text: "DEVICES";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Tokens.text-tertiary;
+                        letter-spacing: 0.6px;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        text: root.refreshing ? "scanning…" : root.last-updated-label;
+                        font-size: 11px;
+                        color: Tokens.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: 10px;
+
+                        for d[i] in root.devices: DeviceRow {
+                            device: d;
+                            is-selected: i == root.selected-index;
+                            pick => { root.pick(i); }
+                            snooze => { root.snooze(d.key); }
+                        }
+
+                        if !root.has-devices: Rectangle {
+                            height: 96px;
+                            border-radius: 12px;
+                            background: Tokens.surface;
+                            border-width: 1px;
+                            border-color: Tokens.border-subtle;
+
+                            Text {
+                                text: root.refreshing
+                                    ? "Scanning for Logitech devices…"
+                                    : "No Logitech devices found.";
+                                font-size: 13px;
+                                color: Tokens.text-secondary;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // right: details, then settings
+            VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                spacing: 16px;
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: 14px;
+                    background: Tokens.surface;
+                    border-width: 1px;
+                    border-color: Tokens.border-subtle;
+                    drop-shadow-blur: 16px;
+                    drop-shadow-color: #00000055;
+                    drop-shadow-offset-y: 4px;
+
+                    VerticalLayout {
+                        padding-left: 18px;
+                        padding-right: 18px;
+                        padding-top: 18px;
+                        padding-bottom: 18px;
+                        spacing: 14px;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            cross-axis-alignment: center;
+
+                            Rectangle {
+                                width: 46px;
+                                height: 46px;
+                                border-radius: 12px;
+                                background: Tokens.accent.with-alpha(0.14);
+                                border-width: 1px;
+                                border-color: Tokens.accent.with-alpha(0.28);
+
+                                Text {
+                                    text: root.selected.icon;
+                                    font-size: 18px;
+                                    font-weight: 700;
+                                    color: Tokens.accent;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 3px;
+                                alignment: center;
+
+                                Text {
+                                    text: root.has-devices ? root.selected.name : "No device selected";
+                                    font-size: 16px;
+                                    font-weight: 600;
+                                    color: Tokens.text-primary;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    text: root.has-devices ? root.selected.kind : "—";
+                                    font-size: 12px;
+                                    color: Tokens.text-tertiary;
+                                }
+                            }
+
+                            Rectangle { horizontal-stretch: 1; }
+
+                            if root.has-devices: Badge {
+                                label: root.selected.connection;
+                                tint: Tokens.conn-color(root.selected.connection);
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+
+                            StatTile {
+                                label: "BATTERY";
+                                value: root.selected.percent-text;
+                                value-color: root.selected.attention
+                                    ? Tokens.red
+                                    : Tokens.bar-color(root.selected.has-percent, root.selected.status, root.selected.percent);
+                            }
+
+                            StatTile {
+                                label: "VOLTAGE";
+                                value: root.selected.millivolts > 0 ? "\{root.selected.millivolts} mV" : "—";
+                            }
+
+                            StatTile {
+                                label: "UPDATED";
+                                value: root.selected.updated;
+                            }
+                        }
+
+                        BatteryBar {
+                            percent: max(0, root.selected.percent);
+                            fill-color: Tokens.bar-color(root.selected.has-percent, root.selected.status, root.selected.percent);
+                        }
+
+                        // Status is the one field the stat tiles above do not already carry;
+                        // connection is the badge next to the title, and voltage is the tile,
+                        // so repeating them here just makes the card noisy.
+                        DetailLine { label: "Status"; value: root.selected.status; }
+                        if (root.has-devices && root.selected.error != "") : DetailLine {
+                            label: "Reported";
+                            value: root.selected.error;
+                        }
+
+                        Rectangle { height: 1px; background: Tokens.border-subtle; }
+
+                        Text {
+                            text: "SETTINGS";
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: Tokens.text-tertiary;
+                            letter-spacing: 0.6px;
+                        }
+
+                        SettingRow {
+                            title: "Battery notifications";
+                            with-switch: true;
+                            toggled <=> root.notifications-enabled;
+                            changed(v) => { root.notifications-toggled(v); }
+                        }
+
+                        SettingRow {
+                            title: "Notification thresholds";
+                            value: root.thresholds-text;
+                        }
+
+                        SettingRow {
+                            title: "Refresh interval";
+                            value: "\{root.refresh-seconds} s";
+                        }
+
+                        if root.notice != "": Text {
+                            text: root.notice;
+                            font-size: 11px;
+                            color: Tokens.text-tertiary;
+                            wrap: word-wrap;
+                        }
+
+                        Rectangle { vertical-stretch: 1; background: transparent; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The About view. The `AboutSlint` widget is required by the Slint licence and is shown
+/// here rather than buried, because this build really does use Slint under the hood.
+export component AboutWindow inherits Window {
+    title: "About Periphery";
+    width: 460px;
+    height: 340px;
+    background: Tokens.bg;
+
+    callback close-requested();
+
+    VerticalLayout {
+        padding: 26px;
+        spacing: 12px;
+        alignment: center;
+
+        Text {
+            text: "Periphery";
+            font-size: 22px;
+            font-weight: 700;
+            color: Tokens.text-primary;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "A Rust user interface for Logitech HID++ devices.";
+            font-size: 13px;
+            color: Tokens.text-secondary;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: "Battery levels, connection state and the device list come from the app's own HID++ implementation — no solaar, no hidapi, no Python.";
+            font-size: 12px;
+            color: Tokens.text-tertiary;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        AboutSlint { }
+
+        Button {
+            text: "Close";
+            width: 96px;
+            height: 30px;
+            clicked => { root.close-requested(); }
+        }
+    }
+}

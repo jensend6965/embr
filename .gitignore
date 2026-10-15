@@ -1,0 +1,6 @@
+target/
+*.tmp
+# Throwaway experiment output: spike READMEs and sources are kept, their build directories and
+# screenshot dumps are not.
+spikes/*/evidence/
+*.log
