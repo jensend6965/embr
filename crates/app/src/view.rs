@@ -1,9 +1,8 @@
 //! `core`'s view model in the shape the `.slint` file wants.
 //!
 //! This is pure translation: the percentage text (with the `~` that marks an estimate), the
-//! status label and the age all come from `core`. The only things decided here are the two
-//! things Slint cannot express — a missing number is `-1` rather than `Option`, and a device
-//! kind is a one-letter glyph.
+//! status label and the age all come from `core`. The only thing decided here is the one
+//! thing Slint cannot express — a missing number is `-1` rather than `Option`.
 
 use std::time::SystemTime;
 
@@ -15,7 +14,6 @@ use crate::Device;
 pub fn nothing() -> Device {
     Device {
         key: "".into(),
-        icon: "·".into(),
         name: "".into(),
         kind: "".into(),
         connection: "".into(),
@@ -33,7 +31,6 @@ pub fn nothing() -> Device {
 pub fn device(view: &DeviceView) -> Device {
     Device {
         key: view.key.clone().into(),
-        icon: glyph(&view.kind).into(),
         name: view.name.clone().into(),
         kind: view.kind.clone().into(),
         connection: view.connection.clone().into(),
@@ -53,18 +50,4 @@ pub fn age(view: &DeviceView) -> String {
     view.captured
         .map(|captured| human_age(captured, SystemTime::now()))
         .unwrap_or_else(|| "never".to_string())
-}
-
-fn glyph(kind: &str) -> &'static str {
-    match kind {
-        "Mouse" => "M",
-        "Keyboard" => "K",
-        "Headset" => "H",
-        "Trackball" => "T",
-        "Touchpad" => "P",
-        "Numpad" => "N",
-        "Presenter" => "S",
-        "Remote" => "R",
-        _ => "?",
-    }
 }
