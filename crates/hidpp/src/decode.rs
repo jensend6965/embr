@@ -7,9 +7,11 @@
 //! | `BATTERY_STATUS {1000}` | `level% next% status` | a real percentage |
 //! | `BATTERY_VOLTAGE {1001}` | `millivolts:u16 flags` | voltage (+ charge state in the flags) |
 //! | `UNIFIED_BATTERY {1004}` | `charge% level-nibble status unused` | percentage with a coarse level fallback |
+//! | `ADC_MEASUREMENT {1F20}` | `millivolts:u16 flags` | voltage, for headsets |
 //!
-//! A device that reports only voltage is the common case (both devices on the development
-//! machine are), so the percentage then comes from our own curve and is marked estimated.
+//! A device that reports only voltage is the common case (two of the three devices on the
+//! development machine are, and the third is a headset that uses the ADC feature), so the
+//! percentage then comes from our own curve and is marked estimated.
 //!
 //! `BATTERY_VOLTAGE` flags, as the protocol defines them:
 //!
@@ -30,6 +32,7 @@ pub enum BatterySource {
     Status,
     Voltage,
     Unified,
+    Adc,
 }
 
 impl BatterySource {
@@ -38,6 +41,7 @@ impl BatterySource {
             Self::Status => "BATTERY_STATUS {1000}",
             Self::Voltage => "BATTERY_VOLTAGE {1001}",
             Self::Unified => "UNIFIED_BATTERY {1004}",
+            Self::Adc => "ADC_MEASUREMENT {1F20}",
         }
     }
 }
@@ -104,6 +108,41 @@ pub fn battery_voltage(payload: &[u8]) -> Option<BatteryReading> {
         source: PercentSource::Estimated,
     };
     Some(BatteryReading::new(Some(percent), Some(millivolts), status))
+}
+
+/// Decode an `ADC_MEASUREMENT {1F20}` payload.
+///
+/// Same `millivolts flags` shape as `BATTERY_VOLTAGE` but the flags mean something else, and
+/// the difference matters: bit 0 says the device has a battery to report at all (a
+/// mains-powered headset answers this call with bit 0 clear rather than staying silent), and
+/// bit 1 says it is taking charge. There is nothing else on the wire, so the percentage comes
+/// from the same voltage curve and is marked estimated.
+pub fn adc_measurement(payload: &[u8]) -> Option<BatteryReading> {
+    if payload.len() < 3 {
+        return None;
+    }
+    let millivolts = u16::from_be_bytes([payload[0], payload[1]]);
+    let flags = payload[2];
+    if flags & 0x01 == 0 {
+        // No battery behind this measurement: report that, rather than a made-up 0 %.
+        return None;
+    }
+    let status = if flags & 0x02 != 0 {
+        ChargeStatus::Recharging
+    } else {
+        ChargeStatus::Discharging
+    };
+    if millivolts == 0 {
+        return Some(BatteryReading::new(None, None, status));
+    }
+    Some(BatteryReading::new(
+        Some(Percent {
+            value: estimate_percent(millivolts),
+            source: PercentSource::Estimated,
+        }),
+        Some(millivolts),
+        status,
+    ))
 }
 
 /// Decode a `UNIFIED_BATTERY {1004}` payload.
@@ -237,6 +276,36 @@ mod tests {
             battery_status(&[1, 2]).is_none(),
             "short payloads are rejected"
         );
+    }
+
+    #[test]
+    fn adc_measurement_from_the_real_headset_decodes() {
+        // verbatim: G733 headset, 0x1F20 at feature index 8, payload "0F 1B 01" = 3867 mV with
+        // flags 0x01 (battery present, discharging). The reference implementation reads the same
+        // call as "61% 3867mV DISCHARGING", so our curve has to agree on the same voltage.
+        let reading = adc_measurement(&[0x0F, 0x1B, 0x01]).unwrap();
+        assert_eq!(reading.millivolts, Some(3867));
+        assert_eq!(reading.status, ChargeStatus::Discharging);
+        let percent = reading.percent.unwrap();
+        assert_eq!(percent.value, 61);
+        assert!(percent.is_estimate());
+        assert!(
+            reading.summary().starts_with('~'),
+            "an ADC reading has no device percentage to trust, so it must be marked estimated"
+        );
+    }
+
+    #[test]
+    fn adc_measurement_flags_decide_charge_and_presence() {
+        // bit 1 set: the battery is taking charge
+        assert_eq!(
+            adc_measurement(&[0x0F, 0x1B, 0x03]).unwrap().status,
+            ChargeStatus::Recharging
+        );
+        // bit 0 clear: this measurement has no battery behind it, so there is nothing to report
+        assert!(adc_measurement(&[0x0F, 0x1B, 0x00]).is_none());
+        // a truncated payload is not a reading
+        assert!(adc_measurement(&[0x0F, 0x1B]).is_none());
     }
 
     #[test]

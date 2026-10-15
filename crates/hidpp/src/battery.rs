@@ -141,29 +141,29 @@ impl BatteryReading {
     }
 }
 
-/// Our default voltage→percentage curve: `(millivolts, percent)` anchors, descending.
+/// Our voltage→percentage curve: `(millivolts, percent)` anchors, descending.
 ///
-/// A single lithium-ion cell sits near 4.2 V full and falls off a cliff below ~3.4 V, with
-/// a long flat plateau in the middle — which is why a straight line from 4.2 V to 3.0 V
-/// reads far too high for most of the discharge. These anchors follow that shape. They are
-/// an approximation for voltage-only devices; [`estimate_percent`] interpolates between
-/// them, and the whole table can be replaced by a measured one.
+/// A single lithium-ion cell sits near 4.2 V full and falls off a cliff below ~3.4 V, with a
+/// long flat plateau in the middle — which is why a straight line from 4.2 V to 3.0 V reads
+/// far too high for most of the discharge. These anchors are the reference implementation's
+/// curve: matching them means our inferred percentage agrees with what `solaar show` prints for
+/// the same voltage (a headset at 3867 mV is 61 % to both of us), which is what makes the number
+/// checkable by a second opinion. The value is still inferred rather than reported, so it stays
+/// marked `~`. [`estimate_percent`] interpolates between the anchors.
 pub const VOLTAGE_CURVE: &[(u16, u8)] = &[
-    (4200, 100),
-    (4100, 93),
-    (4000, 85),
-    (3950, 79),
-    (3900, 72),
-    (3850, 63),
-    (3800, 54),
-    (3750, 44),
-    (3700, 34),
-    (3650, 25),
-    (3600, 17),
-    (3550, 11),
-    (3500, 6),
-    (3400, 2),
-    (3300, 0),
+    (4186, 100),
+    (4067, 90),
+    (3989, 80),
+    (3922, 70),
+    (3859, 60),
+    (3811, 50),
+    (3778, 40),
+    (3751, 30),
+    (3717, 20),
+    (3671, 10),
+    (3646, 5),
+    (3579, 2),
+    (3500, 0),
 ];
 
 /// Estimate a percentage from millivolts using [`VOLTAGE_CURVE`].
@@ -195,11 +195,22 @@ pub fn estimate_percent_with(millivolts: u16, curve: &[(u16, u8)]) -> u8 {
             if span == 0 {
                 return lo_pct;
             }
-            let travelled = hi_mv - millivolts;
-            let hi = u32::from(hi_pct);
-            let lo = u32::from(lo_pct);
-            let delta = (hi - lo) * u32::from(travelled) / u32::from(span);
-            return hi.saturating_sub(delta) as u8;
+            // Round to nearest (halves to even), which is what the reference implementation's
+            // round() does. Truncating instead reads up to a point high all the way down the
+            // curve, which is exactly the kind of quiet disagreement with `solaar show` that
+            // makes a percentage look wrong.
+            let rise = u32::from(hi_pct) - u32::from(lo_pct);
+            let travelled = u32::from(millivolts - lo_mv);
+            let scaled = rise * travelled;
+            let quotient = scaled / u32::from(span);
+            let remainder = scaled % u32::from(span);
+            let rounded = match (2 * remainder).cmp(&u32::from(span)) {
+                std::cmp::Ordering::Greater => quotient + 1,
+                std::cmp::Ordering::Less => quotient,
+                std::cmp::Ordering::Equal if quotient % 2 == 1 => quotient + 1,
+                std::cmp::Ordering::Equal => quotient,
+            };
+            return (u32::from(lo_pct) + rounded) as u8;
         }
     }
     bottom_pct
@@ -235,22 +246,27 @@ mod tests {
             );
             previous = *pct;
         }
-        assert_eq!(estimate_percent(4200), 100);
+        assert_eq!(estimate_percent(4200), 100, "clamped to the top anchor");
         assert_eq!(estimate_percent(5000), 100);
-        assert_eq!(estimate_percent(3300), 0);
+        assert_eq!(estimate_percent(3490), 0, "clamped to the bottom anchor");
         assert_eq!(estimate_percent(2500), 0);
     }
 
     #[test]
     fn the_curve_interpolates_between_anchors() {
         // exactly on an anchor
-        assert_eq!(estimate_percent(3850), 63);
-        // half way from 3850 (63%) down to 3800 (54%)
-        let midpoint = estimate_percent(3825);
+        assert_eq!(estimate_percent(3859), 60);
+        // half way from 3859 (60%) down to 3811 (50%)
+        let midpoint = estimate_percent(3835);
         assert!(
-            (54..=63).contains(&midpoint),
+            (50..=60).contains(&midpoint),
             "expected an interpolated value, got {midpoint}"
         );
+        // the voltages our own hardware actually reports, so a curve swap cannot silently
+        // move the numbers: a G703 at 4020 mV is 84 % and a G733 headset at 3867 mV is 61 %
+        // in the reference implementation too
+        assert_eq!(estimate_percent(4020), 84);
+        assert_eq!(estimate_percent(3867), 61);
         // monotone over the whole plausible range: walking *down* in voltage, the
         // percentage must never rise
         let mut last = 101;

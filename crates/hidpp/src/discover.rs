@@ -139,6 +139,13 @@ pub struct Device {
     pub battery: Option<BatteryReading>,
     /// Why there is no battery reading, if there is none.
     pub error: Option<String>,
+    /// Whether the device itself answered a HID++ call.
+    ///
+    /// This is what separates "present but with nothing to say about its battery" from "not
+    /// there": the headset on this machine answers every other feature in 2 ms and only refuses
+    /// the battery call while it is idle, so calling that state "Unavailable" reads as "the
+    /// device is gone" when it is sitting on the desk in use.
+    pub responded: bool,
 }
 
 impl Device {
@@ -153,7 +160,8 @@ impl Device {
     pub fn status_label(&self) -> &'static str {
         match &self.battery {
             Some(reading) => reading.status.label(),
-            None => "Unavailable",
+            None if self.responded => "Connected",
+            None => "Not answering",
         }
     }
 }
@@ -250,22 +258,24 @@ pub fn discover() -> DiscoveryReport {
             wpid: None,
             battery: None,
             error: None,
+            responded: false,
         };
         match Channel::open(&node.hidraw) {
             Ok(mut channel) => {
-                // A short ping first. Waiting the full device timeout for something that never
-                // answers is what turns a refresh into a twenty-second stall, and a device
-                // that cannot answer in under a second is asleep, not slow.
-                match feature_index(
-                    &mut channel,
-                    DEVICE_SELF,
-                    Feature::BatteryVoltage,
-                    DIRECT_PING_TIMEOUT,
-                ) {
-                    Ok(_) => match read_battery(&mut channel, DEVICE_SELF, DEVICE_TIMEOUT) {
-                        Ok(reading) => device.battery = Some(reading),
-                        Err(err) => device.error = Some(err.to_string()),
-                    },
+                // A short ping first, on ROOT: every HID++ 2.0 device implements it, so this
+                // asks "are you there", not "do you happen to have a voltage feature". Waiting
+                // the full device timeout for something that never answers is what turns a
+                // refresh into a twenty-second stall, and a device that cannot answer in under
+                // a second is asleep, not slow.
+                match feature_index(&mut channel, DEVICE_SELF, Feature::Root, DIRECT_PING_TIMEOUT)
+                {
+                    Ok(_) => {
+                        device.responded = true;
+                        match read_battery(&mut channel, DEVICE_SELF, DEVICE_TIMEOUT) {
+                            Ok(reading) => device.battery = Some(reading),
+                            Err(err) => device.error = Some(err.to_string()),
+                        }
+                    }
                     Err(err) => {
                         device.error = Some(format!(
                             "no HID++ answer within {} ms ({err})",
@@ -307,6 +317,7 @@ fn device_from_slot(
         wpid: slot.wpid,
         battery: None,
         error: None,
+        responded: false,
     };
     if device.name.is_empty()
         && let Some(own) = own_node_for(nodes, slot)
@@ -314,6 +325,8 @@ fn device_from_slot(
         device.name = own.name.clone();
     }
     if let Some((name, kind)) = device_name(channel, slot.slot, RECEIVER_TIMEOUT) {
+        // The device answered us by name, so it is there even if its battery call fails.
+        device.responded = true;
         if !name.is_empty() {
             device.name = name;
         }
@@ -322,7 +335,10 @@ fn device_from_slot(
         }
     }
     match read_battery(channel, slot.slot, DEVICE_TIMEOUT) {
-        Ok(reading) => device.battery = Some(reading),
+        Ok(reading) => {
+            device.responded = true;
+            device.battery = Some(reading);
+        }
         Err(err) => device.error = Some(err.to_string()),
     }
     device
@@ -382,6 +398,9 @@ pub fn read_battery(
         Feature::BatteryStatus,
         Feature::UnifiedBattery,
         Feature::BatteryVoltage,
+        // Headsets report their battery through the analogue measurement — the G733 answers
+        // nothing on the 0x10xx battery features above.
+        Feature::AdcMeasurement,
     ] {
         let index = match feature_index(channel, device, feature, timeout) {
             Ok(Some(index)) => index,
@@ -412,6 +431,7 @@ pub fn read_battery(
             Feature::BatteryStatus => decode::battery_status(payload),
             Feature::UnifiedBattery => decode::unified_battery(payload),
             Feature::BatteryVoltage => decode::battery_voltage(payload),
+            Feature::AdcMeasurement => decode::adc_measurement(payload),
             _ => None,
         };
         if let Some(new) = decoded {
@@ -589,7 +609,7 @@ mod tests {
 
     #[test]
     fn a_device_without_a_reading_says_so_instead_of_inventing_a_number() {
-        let device = Device {
+        let mut device = Device {
             key: "x".into(),
             name: "Logitech G733 Gaming Headset".into(),
             kind: DeviceKind::Headset,
@@ -598,10 +618,16 @@ mod tests {
             serial: None,
             wpid: None,
             battery: None,
-            error: Some("no battery feature answered".into()),
+            error: Some("no battery feature answered (device 0xFF)".into()),
+            responded: false,
         };
         assert_eq!(device.percent_text(), "—");
-        assert_eq!(device.status_label(), "Unavailable");
+        // Nothing answered: asleep or unplugged, and that is what the row has to say.
+        assert_eq!(device.status_label(), "Not answering");
+        // It answered us and simply has no battery reading to give — the state the idle headset
+        // is in. Calling that "Unavailable" reads as "gone", which it is not.
+        device.responded = true;
+        assert_eq!(device.status_label(), "Connected");
     }
 
     #[test]

@@ -51,6 +51,9 @@ pub enum Feature {
     BatteryVoltage = 0x1001,
     /// `0x1004` — unified battery (level, voltage and flags in one call).
     UnifiedBattery = 0x1004,
+    /// `0x1F20` — analogue measurement, which is how headsets report their battery:
+    /// the same `millivolts flags` shape as `BATTERY_VOLTAGE`, but different flag bits.
+    AdcMeasurement = 0x1F20,
     /// `0x1D4B` — wireless connection status (encryption, RSSI, …).
     WirelessDeviceStatus = 0x1D4B,
     /// `0x1814` — change host / connection state.
@@ -81,6 +84,7 @@ impl Feature {
             Feature::BatteryStatus => "BATTERY STATUS",
             Feature::BatteryVoltage => "BATTERY VOLTAGE",
             Feature::UnifiedBattery => "UNIFIED BATTERY",
+            Feature::AdcMeasurement => "ADC MEASUREMENT",
             Feature::WirelessDeviceStatus => "WIRELESS DEVICE STATUS",
             Feature::ChangeHost => "CHANGE HOST",
             Feature::AdjustableDpi => "ADJUSTABLE DPI",
@@ -101,6 +105,7 @@ impl Feature {
             0x1000 => "BATTERY STATUS",
             0x1001 => "BATTERY VOLTAGE",
             0x1004 => "UNIFIED BATTERY",
+            0x1F20 => "ADC MEASUREMENT",
             0x1D4B => "WIRELESS DEVICE STATUS",
             0x1814 => "CHANGE HOST",
             0x1B04 => "SPECIAL KEYS",
