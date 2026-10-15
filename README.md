@@ -18,6 +18,34 @@ notifications.
 
 *A device that has stopped answering says so, rather than showing a stale number.*
 
+## How this was written
+
+**Most of this code was written by an AI assistant, not by hand.** Jensen — the name on the
+commits — directs the project: he decides what Embr should do, what it must not do, and what
+"correct" means. An AI assistant (Hermes Agent, running large language models) writes the code:
+the Rust, the Slint interface, the tests, the comments, and this file. It is made in conversation —
+he asks for a change or reports what the app did wrong, the assistant makes it, runs the suite and
+reports what it checked on the hardware.
+
+That is worth saying plainly, because it changes what you should do with what you find here:
+
+* **Treat it as unreviewed work by a competent stranger.** Nothing here has had a second pair of
+  human eyes. The protocol layer was measured against real devices and there are tests, but the
+  design and the code are the model's, and a model can be confidently wrong in ways that compile,
+  pass tests and read tidily.
+* **The comments and commit messages are claims, not evidence.** Every file explains itself and
+  says why a thing is the way it is — written by the same process as the code it describes. Where
+  it matters, check the explanation against the code.
+* **What was not delegated:** the requirements, the decisions about what Embr does, the review of
+  each change before it landed, and all testing on physical hardware — three Logitech peripherals
+  on CachyOS with KWin and Wayland, the only environment this has ever run in. The assistant has
+  never seen those devices: everything in `crates/embr-hidpp` comes from the public HID++
+  documentation and from measurements taken on this machine, and the constants taken from Solaar
+  are marked as such (see [Licence](#licence)).
+
+Practically: read it before you run it, and report what breaks. HID++ has no read-only mode, so
+"just trying it" means writing to your devices.
+
 ## What it does
 
 * **Charge for every device it can reach**, headsets included. They report it through a different
@@ -27,14 +55,27 @@ notifications.
   did not answer is *Not answering*; a percentage worked out from voltage is marked `~`, and a
   percentage a device reports itself always wins.
 * **Worst battery first**, with the age of each reading beside it.
+* **A window that uses the width it is given.** Dragged wider, the device list stops at a
+  comfortable width and the detail card takes the rest; the settings page runs its rows the full
+  width with each control at the far right, the way Solaar looks when it is maximised. Narrow
+  enough and the two panes start to compete — below about 700 px they cannot both fit.
 * **A cadence that matches what you are doing.** While the window is open the devices are read
   at the interval you choose; with the window closed it backs off to no more than once every two
   minutes, and reads everything the moment the window comes back. **Rescan** reads now, and gives
   a device that has been asleep longer to answer before writing it off as *Not answering*.
+* **It notices a device by itself.** Pick a mouse up, switch a keyboard on, plug a headset back
+  in — the kernel says a HID device came or went, Embr hears it and sweeps at once, so the row
+  stops saying *Not answering* without anyone pressing anything. A device the last sweep could not
+  read is also asked again within ten seconds (doubling to eighty) while the window is open. The
+  listening costs nothing between events: there is no polling of the hardware, because on a
+  wireless device every such question wakes it.
 * **Tray icon and notifications.** The icon is a battery coloured by the worst device — or the
-  worst level itself, as a number, if you would rather read it than measure it. Notifications stay
-  off until you switch them on; then they have thresholds, hysteresis, one-per-crossing
-  de-duplication, rate limiting and a snooze.
+  worst level itself, as a number, if you would rather read it than measure it. Any device can be
+  given an icon of its own instead (Settings → Tray): one icon per device, each showing *its* level,
+  the way a monitoring overlay puts a readout per sensor on screen. With nothing chosen there is one
+  icon and it follows the lowest charge.
+* **Notifications** stay off until you switch them on; then they have thresholds, hysteresis,
+  one-per-crossing de-duplication, rate limiting and a snooze.
 * **A threshold of its own for any device** you ask for one. A headset and a mouse do not drain at
   the same rate, so a device with its own level watches that level instead of the shared pair; set
   it next to the device it belongs to, and `Default` puts it back.
