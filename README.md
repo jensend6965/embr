@@ -33,8 +33,9 @@ What works today:
 ## Build and run
 
 ```bash
-# Ubuntu/Debian: the system libraries Slint links against
-sudo apt install libfontconfig1-dev libfreetype6-dev libxkbcommon-dev
+# Ubuntu/Debian: Slint's font/input stack, and libdbus for the tray item (`ksni` 0.2 links the
+# C library — `libdbus-1-dev` is what a bare image is missing first)
+sudo apt install libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libdbus-1-dev
 
 cargo build --release
 ./target/release/embr

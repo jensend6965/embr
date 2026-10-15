@@ -14,14 +14,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Slint's Gl/Femtovg renderer links against the system font and input stack. This is the
-      # Debian/Ubuntu package list its own instructions give; the repository needs no other
-      # system dependency (the protocol crate depends on `libc` alone).
-      - name: system libraries for the Slint build
+      # Slint's Gl/Femtovg renderer links against the system font and input stack, and the tray
+      # item (`ksni` 0.2) links against libdbus — it has no pure-Rust D-Bus backend. The protocol
+      # crate itself needs nothing but `libc`.
+      - name: system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libgl1-mesa-dev pkg-config
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libgl1-mesa-dev \
+            libdbus-1-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
         with:
