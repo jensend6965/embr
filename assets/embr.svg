@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Embr">
+  <title>Embr</title>
+  <!-- The app mark: a flame whose inner tongue is a smaller flame, so it reads as fire and not as
+       a droplet at 16 px. Two closed paths, no strokes, no raster assets — it is drawn the same
+       way at 16 px and at 512 px. -->
+  <defs>
+    <linearGradient id="embr-ember" x1="32" y1="6" x2="32" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff6b2c"/>
+      <stop offset=".55" stop-color="#ff9a1f"/>
+      <stop offset="1" stop-color="#ffc94a"/>
+    </linearGradient>
+    <linearGradient id="embr-core" x1="32" y1="23" x2="32" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff3c0"/>
+      <stop offset="1" stop-color="#ffce5c"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 58C20.4 58 12.5 50.2 12.5 40.6C12.5 30.9 19.4 24.6 23.6 17.2C26.2 12.7 27.6 8.2 27.7 5.2C27.7 4.6 28.4 4.3 28.8 4.7C31.3 7.6 36.6 14.8 38.5 21.4C44.9 24.9 51.5 31.4 51.5 40.6C51.5 50.2 43.6 58 32 58Z"
+        fill="url(#embr-ember)"/>
+  <path d="M33.7 24.1C36.3 28.7 39.5 33.3 40.3 38.3C41.3 44.6 37.1 51.5 31.5 51.5C26.5 51.5 23.1 47.7 23.1 43.3C23.1 39.3 25.5 35.7 27.9 31.9C29.7 29.1 30.9 26.7 31.5 23.9C31.7 23.1 33.3 23.2 33.7 24.1Z"
+        fill="url(#embr-core)"/>
+</svg>

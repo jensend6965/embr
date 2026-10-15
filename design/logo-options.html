@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Embr — flame mark options</title>
+<style>
+  :root {
+    /* The app's own palette, so the marks are judged in the place they will live. */
+    --bg:#15161a; --surface:#1c1e23; --line:#2b2e35; --text:#e8eaee; --dim:#9aa0ab; --green:#3ddc97;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; padding:28px 32px; width:1000px;
+    background:var(--bg); color:var(--text);
+    font:14px/1.5 "Noto Sans", system-ui, sans-serif;
+  }
+  h1 { font-size:17px; font-weight:600; margin:0 0 4px; }
+  p.sub { color:var(--dim); margin:0 0 22px; font-size:12.5px; }
+  .opt {
+    background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    padding:16px 18px; margin-bottom:16px; display:flex; gap:22px; align-items:center;
+  }
+  .meta { width:210px; flex:none; }
+  .meta .letter { font-size:11px; font-weight:700; color:var(--green); letter-spacing:.08em; }
+  .meta h2 { font-size:14.5px; font-weight:600; margin:2px 0 6px; }
+  .meta p { margin:0; color:var(--dim); font-size:12px; line-height:1.45; }
+  .sizes { display:flex; align-items:flex-end; gap:20px; }
+  .cell { text-align:center; }
+  .cell .label { font-size:10px; color:var(--dim); margin-top:6px; }
+  .dark, .light { display:flex; align-items:center; justify-content:center; border-radius:8px; }
+  .dark { background:#0f1013; border:1px solid var(--line); }
+  .light { background:#ffffff; border:1px solid #ffffff; }
+  svg { display:block; }
+  .tiles { display:flex; gap:14px; align-items:center; }
+  .tile { width:56px; height:56px; border-radius:14px; display:flex; align-items:center; justify-content:center; }
+  .tile.dark { background:#0f1013; }
+  .tile.light { background:#f4f5f7; }
+  .rowlabel { font-size:10px; color:var(--dim); text-align:center; margin-top:5px; }
+</style>
+</head>
+<body>
+
+<h1>Embr — flame mark, five options</h1>
+<p class="sub">Each mark at 256 / 96 / 48 / 24 / 16 px, dark background beside light. Geometry only — no raster assets, so it stays crisp at every size.</p>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="ember" x1="32" y1="6" x2="32" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF6B2C"/>
+      <stop offset="0.55" stop-color="#FF9A1F"/>
+      <stop offset="1" stop-color="#FFC94A"/>
+    </linearGradient>
+    <linearGradient id="core" x1="32" y1="26" x2="32" y2="53" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF0B8"/>
+      <stop offset="1" stop-color="#FFD166"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="32" y1="6" x2="32" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2BB673"/>
+      <stop offset="1" stop-color="#5BE9A8"/>
+    </linearGradient>
+
+    <!-- A: the flame silhouette used by B/C/D too -->
+    <path id="flame" d="M32 58C20.4 58 12.5 50.2 12.5 40.6C12.5 30.9 19.4 24.6 23.6 17.2C26.2 12.7 27.6 8.2 27.7 5.2C27.7 4.6 28.4 4.3 28.8 4.7C31.3 7.6 36.6 14.8 38.5 21.4C44.9 24.9 51.5 31.4 51.5 40.6C51.5 50.2 43.6 58 32 58Z"/>
+    <path id="flamecore" d="M32 52.6C26 52.6 22.2 48.7 22.2 43.6C22.2 38.3 25.9 35.2 28.2 31C29.1 29.3 29.8 27.4 29.9 26C30 25.5 30.6 25.3 30.9 25.7C32.6 27.9 35.4 32 36.3 35.5C39 37.3 41.8 40.4 41.8 43.7C41.8 48.8 38 52.6 32 52.6Z"/>
+
+    <symbol id="mark-a" viewBox="0 0 64 64"><use href="#flame" fill="url(#ember)"/><use href="#flamecore" fill="url(#core)"/></symbol>
+    <symbol id="mark-b" viewBox="0 0 64 64"><use href="#flame" fill="#FF7A37"/></symbol>
+    <symbol id="mark-c" viewBox="0 0 64 64"><use href="#flame" fill="url(#leaf)"/><use href="#flamecore" fill="#B6F2D3"/></symbol>
+    <symbol id="mark-d" viewBox="0 0 64 64"><use href="#flame" fill="none" stroke="#FFB067" stroke-width="5" stroke-linejoin="round"/></symbol>
+    <symbol id="mark-e" viewBox="0 0 64 64">
+      <use href="#flame" fill="url(#ember)"/>
+      <use href="#flamecore" fill="url(#core)"/>
+      <circle cx="50" cy="13" r="4" fill="#FFC94A"/>
+      <circle cx="55.5" cy="6.5" r="2" fill="#FF9A1F"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="opt">
+  <div class="meta">
+    <div class="letter">OPTION A</div>
+    <h2>Ember core</h2>
+    <p>Flame in a hot-to-warm gradient with a lighter inner core. Reads as fire instantly; the inner shape is what makes it look drawn rather than clipped.</p>
+  </div>
+  <div class="sizes">
+    <div class="cell"><div class="dark"><svg width="256" height="256" viewBox="0 0 64 64"><use href="#mark-a"/></svg></div><div class="label">256</div></div>
+    <div class="cell"><div class="dark"><svg width="96" height="96" viewBox="0 0 64 64"><use href="#mark-a"/></svg></div><div class="label">96</div></div>
+    <div class="cell"><div class="dark"><svg width="48" height="48" viewBox="0 0 64 64"><use href="#mark-a"/></svg></div><div class="label">48</div></div>
+    <div class="cell"><div class="dark"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-a"/></svg></div><div class="label">24</div></div>
+    <div class="cell"><div class="dark"><svg width="16" height="16" viewBox="0 0 64 64"><use href="#mark-a"/></svg></div><div class="label">16</div></div>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="meta">
+    <div class="letter">OPTION B</div>
+    <h2>Flat mark</h2>
+    <p>One path, one colour, no inner detail. The safest at 16 px and the easiest to put on a light page, a dark bar or a packaging box.</p>
+  </div>
+  <div class="sizes">
+    <div class="cell"><div class="dark"><svg width="256" height="256" viewBox="0 0 64 64"><use href="#mark-b"/></svg></div><div class="label">256</div></div>
+    <div class="cell"><div class="dark"><svg width="96" height="96" viewBox="0 0 64 64"><use href="#mark-b"/></svg></div><div class="label">96</div></div>
+    <div class="cell"><div class="dark"><svg width="48" height="48" viewBox="0 0 64 64"><use href="#mark-b"/></svg></div><div class="label">48</div></div>
+    <div class="cell"><div class="dark"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-b"/></svg></div><div class="label">24</div></div>
+    <div class="cell"><div class="dark"><svg width="16" height="16" viewBox="0 0 64 64"><use href="#mark-b"/></svg></div><div class="label">16</div></div>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="meta">
+    <div class="letter">OPTION C</div>
+    <h2>Palette flame</h2>
+    <p>The same flame in the app's own green. Sits in the interface without introducing a second accent colour — at the cost of reading as fire a little less at first glance.</p>
+  </div>
+  <div class="sizes">
+    <div class="cell"><div class="dark"><svg width="256" height="256" viewBox="0 0 64 64"><use href="#mark-c"/></svg></div><div class="label">256</div></div>
+    <div class="cell"><div class="dark"><svg width="96" height="96" viewBox="0 0 64 64"><use href="#mark-c"/></svg></div><div class="label">96</div></div>
+    <div class="cell"><div class="dark"><svg width="48" height="48" viewBox="0 0 64 64"><use href="#mark-c"/></svg></div><div class="label">48</div></div>
+    <div class="cell"><div class="dark"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-c"/></svg></div><div class="label">24</div></div>
+    <div class="cell"><div class="dark"><svg width="16" height="16" viewBox="0 0 64 64"><use href="#mark-c"/></svg></div><div class="label">16</div></div>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="meta">
+    <div class="letter">OPTION D</div>
+    <h2>Outline</h2>
+    <p>Stroked silhouette: inherits whatever colour it is placed on, so it works as an inline UI glyph next to the app name. Weakest as an app icon.</p>
+  </div>
+  <div class="sizes">
+    <div class="cell"><div class="dark"><svg width="256" height="256" viewBox="0 0 64 64"><use href="#mark-d"/></svg></div><div class="label">256</div></div>
+    <div class="cell"><div class="dark"><svg width="96" height="96" viewBox="0 0 64 64"><use href="#mark-d"/></svg></div><div class="label">96</div></div>
+    <div class="cell"><div class="dark"><svg width="48" height="48" viewBox="0 0 64 64"><use href="#mark-d"/></svg></div><div class="label">48</div></div>
+    <div class="cell"><div class="dark"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-d"/></svg></div><div class="label">24</div></div>
+    <div class="cell"><div class="dark"><svg width="16" height="16" viewBox="0 0 64 64"><use href="#mark-d"/></svg></div><div class="label">16</div></div>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="meta">
+    <div class="letter">OPTION E</div>
+    <h2>Ember and sparks</h2>
+    <p>A with two drifting sparks. Most character, least discipline: at 16 px the sparks become dirt on the glass.</p>
+  </div>
+  <div class="sizes">
+    <div class="cell"><div class="dark"><svg width="256" height="256" viewBox="0 0 64 64"><use href="#mark-e"/></svg></div><div class="label">256</div></div>
+    <div class="cell"><div class="dark"><svg width="96" height="96" viewBox="0 0 64 64"><use href="#mark-e"/></svg></div><div class="label">96</div></div>
+    <div class="cell"><div class="dark"><svg width="48" height="48" viewBox="0 0 64 64"><use href="#mark-e"/></svg></div><div class="label">48</div></div>
+    <div class="cell"><div class="dark"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-e"/></svg></div><div class="label">24</div></div>
+    <div class="cell"><div class="dark"><svg width="16" height="16" viewBox="0 0 64 64"><use href="#mark-e"/></svg></div><div class="label">16</div></div>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="meta">
+    <div class="letter">IN PLACE</div>
+    <h2>A at 56 px, both backgrounds</h2>
+    <p>The corner where it will actually sit: rounded tile in the app, square-ish avatar on the repository page.</p>
+  </div>
+  <div class="tiles">
+    <div class="tile dark"><svg width="40" height="40" viewBox="0 0 64 64"><use href="#mark-a"/></svg></div>
+    <div class="tile light"><svg width="40" height="40" viewBox="0 0 64 64"><use href="#mark-a"/></svg></div>
+    <div class="tile dark"><svg width="40" height="40" viewBox="0 0 64 64"><use href="#mark-b"/></svg></div>
+    <div class="tile light"><svg width="40" height="40" viewBox="0 0 64 64"><use href="#mark-b"/></svg></div>
+    <div class="tile dark"><svg width="40" height="40" viewBox="0 0 64 64"><use href="#mark-c"/></svg></div>
+    <div class="tile light"><svg width="40" height="40" viewBox="0 0 64 64"><use href="#mark-c"/></svg></div>
+  </div>
+</div>
+
+</body>
+</html>
