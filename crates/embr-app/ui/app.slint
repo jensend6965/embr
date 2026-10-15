@@ -423,8 +423,11 @@ component SettingRow inherits Rectangle {
     in property <string> title;
     in property <string> value;
     in property <bool> with-switch: false;
+    /// Give this a label to put a button on the right instead of a value or a switch.
+    in property <string> button-text: "";
     in-out property <bool> toggled: false;
     callback changed(bool);
+    callback acted;
 
     height: 44px;
     border-radius: 10px;
@@ -450,13 +453,87 @@ component SettingRow inherits Rectangle {
             toggled => { root.changed(self.checked); }
         }
 
-        if !with-switch: Text {
+        if !with-switch && button-text == "": Text {
             text: value;
             font-size: 13px;
             color: Tokens.text-secondary;
             vertical-alignment: center;
+            overflow: elide;
+        }
+
+        if !with-switch && button-text != "": Button {
+            text: root.button-text;
+            width: 128px;
+            height: 28px;
+            clicked => { root.acted(); }
         }
     }
+}
+
+/// The small grey label a settings page groups its rows under.
+component SectionLabel inherits Text {
+    font-size: 10px;
+    font-weight: 700;
+    color: Tokens.text-tertiary;
+    letter-spacing: 0.6px;
+}
+
+/// A settings row whose value the user moves rather than reads.
+component NumberRow inherits Rectangle {
+    in property <string> title;
+    in property <string> caption;
+    in property <int> minimum: 5;
+    in property <int> maximum: 600;
+    in property <int> step: 5;
+    in-out property <int> number: 60;
+    callback numbered(int);
+
+    height: 44px;
+    border-radius: 10px;
+    background: Tokens.surface-raised;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            alignment: center;
+
+            Text {
+                text: root.title;
+                font-size: 13px;
+                color: Tokens.text-primary;
+            }
+
+            Text {
+                text: root.caption;
+                font-size: 10px;
+                color: Tokens.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        SpinBox {
+            width: 116px;
+            height: 28px;
+            minimum: root.minimum;
+            maximum: root.maximum;
+            step-size: root.step;
+            value <=> root.number;
+            edited(v) => { root.numbered(v); }
+        }
+    }
+}
+
+/// The sentence under a settings row that says what the row above it means.
+component Caption inherits Text {
+    font-size: 10px;
+    color: Tokens.text-tertiary;
+    wrap: word-wrap;
 }
 
 /// The alert level of the selected device: the one setting in this window that is about one
@@ -540,38 +617,44 @@ export component AppWindow inherits Window {
     in property <bool> refreshing: false;
     in-out property <bool> notifications-enabled: false;
     in property <string> thresholds-text: "";
-    /// Seconds between sweeps. Rust clamps this to >= 5 before it lands here.
-    in property <int> refresh-seconds: 60;
+    /// Seconds between the sweeps the window asks for while it is open. Rust clamps this to
+    /// 5–600 before it lands here, and `core::scheduled_interval` is what does the counting.
+    in-out property <int> refresh-seconds: 60;
     in property <string> notice: "";
     in-out property <int> selected-index: -1;
     /// The selected device's alert level, and whether it is one the user set for it.
     in-out property <int> alert-level: 20;
     in property <bool> alert-custom: false;
     in-out property <bool> tray-percent: false;
+    /// Keep running (tray only) when the window is closed, or quit instead.
+    in-out property <bool> close-to-tray: true;
+    /// Where the settings on the settings page are written, so the page can say so.
+    in property <string> config-path: "";
+    /// Which page is showing: 0 is the devices, 1 is the settings. This one is the window's
+    /// own; nothing outside decides it.
+    in-out property <int> view: 0;
 
     callback tick();
-    callback request-refresh();
+    /// Read every device now, with the longer waits a device that has been asleep needs.
+    callback rescan();
     callback pick(int);
     callback snooze(string);
     callback notifications-toggled(bool);
     callback alert-level-changed(int);
     callback alert-level-cleared();
     callback tray-percent-toggled(bool);
+    callback close-to-tray-toggled(bool);
+    callback refresh-seconds-changed(int);
+    callback quit-requested();
     callback show-about();
 
-    // Drains whatever the device worker collected, and keeps the relative ages fresh.
+    // The tick does all the timing: it drains what the device thread produced, keeps the ages
+    // honest and decides when the next scheduled sweep is due. The cadence itself is
+    // `core::scheduled_interval`, and the number lives in the settings.
     Timer {
         interval: 500ms;
         running: true;
         triggered => { root.tick(); }
-    }
-
-    // The refresh cadence comes from the configuration. The `max` is the second half of the
-    // clamp Rust applies, so a hand-edited `refresh_seconds = 0` cannot spin this timer.
-    Timer {
-        interval: max(5, root.refresh-seconds) * 1s;
-        running: true;
-        triggered => { root.request-refresh(); }
     }
 
     init => {
@@ -612,11 +695,29 @@ export component AppWindow inherits Window {
 
             Rectangle { horizontal-stretch: 1; }
 
+            // Two pages: what the devices are doing, and how the app behaves. The active one
+            // is filled, which is the only thing that says which page you are looking at.
             Button {
-                text: root.refreshing ? "Refreshing…" : "Refresh";
+                text: "Devices";
+                width: 92px;
+                height: 30px;
+                primary: root.view == 0;
+                clicked => { root.view = 0; }
+            }
+
+            Button {
+                text: "Settings";
+                width: 92px;
+                height: 30px;
+                primary: root.view == 1;
+                clicked => { root.view = 1; }
+            }
+
+            Button {
+                text: root.refreshing ? "Rescanning…" : "Rescan";
                 width: 116px;
                 height: 30px;
-                clicked => { root.request-refresh(); }
+                clicked => { root.rescan(); }
             }
 
             Button {
@@ -630,7 +731,10 @@ export component AppWindow inherits Window {
         Rectangle { height: 1px; background: Tokens.border-subtle; }
 
         // ---- body ----
-        HorizontalLayout {
+        //
+        // `if` rather than `visible:`: an invisible layout child is still laid out, which put
+        // the settings page below the devices page instead of in its place.
+        if root.view == 0: HorizontalLayout {
             padding-left: 20px;
             padding-right: 20px;
             padding-top: 18px;
@@ -808,23 +912,8 @@ export component AppWindow inherits Window {
 
                         Rectangle { height: 1px; background: Tokens.border-subtle; }
 
-                        Text {
-                            text: "SETTINGS";
-                            font-size: 10px;
-                            font-weight: 700;
-                            color: Tokens.text-tertiary;
-                            letter-spacing: 0.6px;
-                        }
+                        SectionLabel { text: "ALERT FOR THIS DEVICE"; }
 
-                        SettingRow {
-                            title: "Battery notifications";
-                            with-switch: true;
-                            toggled <=> root.notifications-enabled;
-                            changed(v) => { root.notifications-toggled(v); }
-                        }
-
-                        // Only meaningful with a device selected, which is also the only time
-                        // the rest of this card has anything to say.
                         if root.has-devices: AlertLevelRow {
                             default-text: "shared: " + root.thresholds-text;
                             custom: root.alert-custom;
@@ -833,10 +922,79 @@ export component AppWindow inherits Window {
                             cleared => { root.alert-level-cleared(); }
                         }
 
-                        SettingRow {
-                            title: "Refresh interval";
-                            value: "\{root.refresh-seconds} s";
+                        Caption {
+                            text: "Every other setting — notifications, the tray icon, what closing the window does — is on the Settings page.";
                         }
+
+                        Rectangle { vertical-stretch: 1; background: transparent; }
+                    }
+                }
+            }
+        }
+
+        // ---- the settings page ----
+        //
+        // The devices page is about what the hardware is doing; this one is about the app.
+        // Scrolled rather than stretched, so a setting added later pushes the page down instead
+        // of pushing rows out of the window.
+        if root.view == 1: HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 18px;
+            padding-bottom: 18px;
+            spacing: 0;
+
+            Rectangle { horizontal-stretch: 1; }
+
+            VerticalLayout {
+                width: 640px;
+                vertical-stretch: 1;
+
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: 10px;
+
+                        SectionLabel { text: "NOTIFICATIONS"; }
+
+                        SettingRow {
+                            title: "Battery notifications";
+                            with-switch: true;
+                            toggled <=> root.notifications-enabled;
+                            changed(v) => { root.notifications-toggled(v); }
+                        }
+
+                        SettingRow {
+                            title: "Shared thresholds";
+                            value: root.thresholds-text;
+                        }
+
+                        Caption {
+                            text: "A device with a level of its own watches that instead — set it beside the device itself, on the Devices page.";
+                        }
+
+                        SectionLabel { text: "WINDOW"; }
+
+                        SettingRow {
+                            title: "Close to tray";
+                            with-switch: true;
+                            toggled <=> root.close-to-tray;
+                            changed(v) => { root.close-to-tray-toggled(v); }
+                        }
+
+                        Caption {
+                            text: "Closing the window leaves Embr running: the devices are still read, and a low battery is still announced. Turn this off to quit instead.";
+                        }
+
+                        SettingRow {
+                            title: "Stop watching now";
+                            value: "Quits Embr and takes the tray item with it";
+                            button-text: "Quit Embr";
+                            acted => { root.quit-requested(); }
+                        }
+
+                        SectionLabel { text: "TRAY"; }
 
                         SettingRow {
                             title: "Tray icon shows the level";
@@ -845,17 +1003,45 @@ export component AppWindow inherits Window {
                             changed(v) => { root.tray-percent-toggled(v); }
                         }
 
-                        if root.notice != "": Text {
+                        Caption {
+                            text: "Embr registers its tray item as “embr”: some bars draw only the items they have pinned. Closing the window is the fastest way to a tray-only app.";
+                        }
+
+                        SectionLabel { text: "APPLICATION"; }
+
+                        NumberRow {
+                            title: "Refresh interval";
+                            caption: "while the window is open";
+                            minimum: 5;
+                            maximum: 600;
+                            step: 5;
+                            number <=> root.refresh-seconds;
+                            numbered(v) => { root.refresh-seconds-changed(v); }
+                        }
+
+                        Caption {
+                            text: "With the window closed Embr slows down to a read every two minutes; it reads everything the moment the window comes back. Rescan reads now, and gives a device that has been asleep longer to answer.";
+                        }
+
+                        SettingRow {
+                            title: "Settings file";
+                            value: root.config-path;
+                        }
+
+                        Caption {
+                            text: "Written as you change things here. The thresholds and the per-device levels live in it too, so it can be edited by hand while Embr runs.";
+                        }
+
+                        if root.notice != "": Caption {
                             text: root.notice;
-                            font-size: 11px;
-                            color: Tokens.text-tertiary;
-                            wrap: word-wrap;
                         }
 
                         Rectangle { vertical-stretch: 1; background: transparent; }
                     }
                 }
             }
+
+            Rectangle { horizontal-stretch: 1; }
         }
     }
 }

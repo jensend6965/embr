@@ -17,12 +17,19 @@ use crate::sysfs::{self, Node, Role};
 use crate::transport::{Channel, DEVICE_TIMEOUT, RECEIVER_TIMEOUT};
 use crate::{Error, Result};
 
-/// How long a directly attached device gets to prove it speaks HID++.
+/// How long a directly attached device gets to prove it speaks HID++, on a scheduled sweep.
 ///
 /// A device on a cable answers in milliseconds; one that stays silent is asleep (or has no
 /// battery feature at all, like a headset), and spending the full [`DEVICE_TIMEOUT`] on it
 /// would delay every sweep — and therefore the first data the window shows — by seconds.
 const DIRECT_PING_TIMEOUT: Duration = Duration::from_millis(700);
+/// The same wait when the user asked for the sweep: a device coming back from sleep needs a
+/// moment, and they are watching.
+const ASKED_PING_TIMEOUT: Duration = Duration::from_millis(2500);
+/// Twice the scheduled device wait, for the same reason.
+const ASKED_DEVICE_TIMEOUT: Duration = Duration::from_millis(8000);
+/// A receiver that is answering slowly is still answering; this is its stretched cap.
+const ASKED_RECEIVER_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// What kind of peripheral this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,8 +182,54 @@ pub struct DiscoveryReport {
     pub nodes_seen: usize,
 }
 
-/// Discover every Logitech device and read its battery.
+/// How much time a sweep gives a device that has not answered yet.
+///
+/// The two sweeps want opposite things. A **scheduled** one is background housekeeping: nothing
+/// is waiting on it, and a device that is asleep is not worth stalling the pass for — so every
+/// wait is short. A sweep the user **asked** for is different: they are looking at the window,
+/// they may have just picked a device up, and a device that is on its way back from sleep
+/// answers within a couple of seconds — so it waits longer before writing it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Patience {
+    /// The sweep the application schedules for itself.
+    Scheduled,
+    /// The sweep the user asked for, by pressing Rescan or opening the window.
+    Asked,
+}
+
+impl Patience {
+    /// How long a device gets to answer a liveness ping.
+    pub fn ping(self) -> Duration {
+        match self {
+            Self::Scheduled => DIRECT_PING_TIMEOUT,
+            Self::Asked => ASKED_PING_TIMEOUT,
+        }
+    }
+
+    /// How long a device-level feature call may take.
+    pub fn device(self) -> Duration {
+        match self {
+            Self::Scheduled => DEVICE_TIMEOUT,
+            Self::Asked => ASKED_DEVICE_TIMEOUT,
+        }
+    }
+
+    /// How long the receiver gets for its own metadata and its slot list.
+    pub fn receiver(self) -> Duration {
+        match self {
+            Self::Scheduled => RECEIVER_TIMEOUT,
+            Self::Asked => ASKED_RECEIVER_TIMEOUT,
+        }
+    }
+}
+
+/// Discover every Logitech device and read its battery, on the application's own schedule.
 pub fn discover() -> DiscoveryReport {
+    discover_with(Patience::Scheduled)
+}
+
+/// The same, with the waits the caller asks for.
+pub fn discover_with(patience: Patience) -> DiscoveryReport {
     let mut report = DiscoveryReport::default();
     let nodes = sysfs::logitech_nodes();
     report.nodes_seen = nodes.len();
@@ -210,7 +263,7 @@ pub fn discover() -> DiscoveryReport {
                 continue;
             }
         };
-        let (slots, mut warnings) = receiver::read_slots(&mut channel, RECEIVER_TIMEOUT);
+        let (slots, mut warnings) = receiver::read_slots(&mut channel, patience.receiver());
         report.warnings.append(&mut warnings);
         if slots.is_empty() {
             report.warnings.push(format!(
@@ -220,8 +273,14 @@ pub fn discover() -> DiscoveryReport {
             ));
         }
         for slot in slots {
-            let mut device =
-                device_from_slot(&slot, kind, channel_node.product, &nodes, &mut channel);
+            let mut device = device_from_slot(
+                &slot,
+                kind,
+                channel_node.product,
+                &nodes,
+                &mut channel,
+                patience,
+            );
             device.hidraw = None;
             // prefer the device's own node for display, if sysfs exposes one
             if let Some(own) = own_node_for(&nodes, &slot) {
@@ -267,15 +326,10 @@ pub fn discover() -> DiscoveryReport {
                 // the full device timeout for something that never answers is what turns a
                 // refresh into a twenty-second stall, and a device that cannot answer in under
                 // a second is asleep, not slow.
-                match feature_index(
-                    &mut channel,
-                    DEVICE_SELF,
-                    Feature::Root,
-                    DIRECT_PING_TIMEOUT,
-                ) {
+                match feature_index(&mut channel, DEVICE_SELF, Feature::Root, patience.ping()) {
                     Ok(_) => {
                         device.responded = true;
-                        match read_battery(&mut channel, DEVICE_SELF, DEVICE_TIMEOUT) {
+                        match read_battery(&mut channel, DEVICE_SELF, patience.device()) {
                             Ok(reading) => device.battery = Some(reading),
                             Err(err) => device.error = Some(err.to_string()),
                         }
@@ -283,7 +337,7 @@ pub fn discover() -> DiscoveryReport {
                     Err(err) => {
                         device.error = Some(format!(
                             "no HID++ answer within {} ms ({err})",
-                            DIRECT_PING_TIMEOUT.as_millis()
+                            patience.ping().as_millis()
                         ));
                     }
                 }
@@ -302,6 +356,7 @@ fn device_from_slot(
     product: u16,
     nodes: &[Node],
     channel: &mut Channel,
+    patience: Patience,
 ) -> Device {
     let key = slot
         .serial
@@ -328,7 +383,7 @@ fn device_from_slot(
     {
         device.name = own.name.clone();
     }
-    if let Some((name, kind)) = device_name(channel, slot.slot, RECEIVER_TIMEOUT) {
+    if let Some((name, kind)) = device_name(channel, slot.slot, patience.receiver()) {
         // The device answered us by name, so it is there even if its battery call fails.
         device.responded = true;
         if !name.is_empty() {
@@ -338,7 +393,7 @@ fn device_from_slot(
             device.kind = kind;
         }
     }
-    match read_battery(channel, slot.slot, DEVICE_TIMEOUT) {
+    match read_battery(channel, slot.slot, patience.device()) {
         Ok(reading) => {
             device.responded = true;
             device.battery = Some(reading);
@@ -575,6 +630,21 @@ fn known_feature(id: u16) -> Option<Feature> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sweep_the_user_asked_for_waits_longer_than_a_scheduled_one() {
+        assert!(
+            Patience::Asked.ping() > Patience::Scheduled.ping(),
+            "a device coming back from sleep gets more than the scheduled ping"
+        );
+        assert!(Patience::Asked.device() > Patience::Scheduled.device());
+        assert!(Patience::Asked.receiver() > Patience::Scheduled.receiver());
+        // …but not without end: the user is sitting in front of the window waiting for it.
+        assert!(
+            Patience::Asked.device() <= Duration::from_secs(10),
+            "an asked sweep must still finish in seconds"
+        );
+    }
 
     #[test]
     fn kinds_decode_from_the_device_byte_and_from_names() {

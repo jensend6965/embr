@@ -21,15 +21,17 @@ pub const FILE_NAME: &str = "config.toml";
 pub struct General {
     /// How often the device list and batteries are refreshed, in seconds.
     pub refresh_seconds: u64,
-    /// Start with the window hidden (tray only).
-    pub start_hidden: bool,
+    /// What the window's close button does: `true` keeps the app running (tray only), `false`
+    /// quits. On by default — a battery monitor that stops watching when its window is closed
+    /// is a battery monitor that is not watching.
+    pub close_to_tray: bool,
 }
 
 impl Default for General {
     fn default() -> Self {
         Self {
             refresh_seconds: 60,
-            start_hidden: false,
+            close_to_tray: true,
         }
     }
 }
@@ -230,6 +232,23 @@ mod tests {
         );
         assert_eq!(config.notifications.thresholds, vec![20, 10]);
         assert_eq!(config.general.refresh_seconds, 60);
+        assert!(
+            config.general.close_to_tray,
+            "closing the window must leave the app watching unless the user says otherwise"
+        );
+    }
+
+    #[test]
+    fn a_config_written_before_close_to_tray_existed_still_closes_to_the_tray() {
+        let path = scratch("older");
+        std::fs::write(&path, "[general]\nrefresh_seconds = 45\n").unwrap();
+        let (config, problems) = load(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(config.general.refresh_seconds, 45);
+        assert!(
+            config.general.close_to_tray,
+            "an absent key means the default, which is to keep running"
+        );
     }
 
     #[test]

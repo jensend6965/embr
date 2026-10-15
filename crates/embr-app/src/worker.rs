@@ -11,15 +11,11 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::Instant;
 
-use embr_core::{Alert, Monitor};
+use embr_core::{Alert, Monitor, Patience, default_path};
 use ksni::Handle;
 
-use crate::messages::{Command, UiState, dispatch_alert, thresholds_text};
+use crate::messages::{Command, Notice, UiState, dispatch_alert, thresholds_text};
 use crate::tray::EmbrTray;
-
-/// Whatever the configuration file says, the window never asks for a faster cadence than
-/// this: a sweep is seconds of HID++ traffic and the devices are not ours alone.
-pub const MIN_REFRESH_SECONDS: u64 = 5;
 
 /// A hidden switch, for proving the notification path while notifications are off (the
 /// default): `EMBR_DEBUG_ALERT=1 embr` sends one synthetic low-battery alert
@@ -29,7 +25,7 @@ const DEBUG_ALERT_VARIABLE: &str = "EMBR_DEBUG_ALERT";
 pub struct DeviceWorker {
     monitor: Monitor,
     states: Sender<UiState>,
-    alerts: Sender<Alert>,
+    alerts: Sender<Notice>,
     tray: Option<Handle<EmbrTray>>,
     debug_alert: bool,
 }
@@ -39,7 +35,7 @@ pub struct DeviceWorker {
 pub fn spawn(
     commands: Receiver<Command>,
     states: Sender<UiState>,
-    alerts: Sender<Alert>,
+    alerts: Sender<Notice>,
     tray: Option<Handle<EmbrTray>>,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     let worker = DeviceWorker {
@@ -96,10 +92,15 @@ impl DeviceWorker {
             }
 
             let mut refresh = false;
+            let mut rescan = false;
             let mut settings_changed = false;
             for command in batch {
                 match command {
                     Command::Refresh => refresh = true,
+                    Command::Rescan => {
+                        refresh = true;
+                        rescan = true;
+                    }
                     Command::Snooze(key) => {
                         self.monitor.snooze(&key);
                         eprintln!("[devices] snoozed {}", self.name_of(&key));
@@ -153,11 +154,43 @@ impl DeviceWorker {
                         }
                         settings_changed = true;
                     }
+                    Command::SetCloseToTray(enabled) => {
+                        match self.monitor.set_close_to_tray(enabled) {
+                            Ok(()) => eprintln!(
+                                "[devices] closing the window will {}",
+                                if enabled {
+                                    "leave Embr running"
+                                } else {
+                                    "quit"
+                                }
+                            ),
+                            Err(problem) => eprintln!(
+                                "[devices] the choice was applied but not saved: {problem}"
+                            ),
+                        }
+                        settings_changed = true;
+                    }
+                    Command::SetRefreshSeconds(seconds) => {
+                        match self.monitor.set_refresh_seconds(seconds) {
+                            Ok(()) => eprintln!(
+                                "[devices] a fresh reading every {}s while the window is open",
+                                seconds.max(embr_core::MIN_REFRESH_SECONDS)
+                            ),
+                            Err(problem) => eprintln!(
+                                "[devices] the interval was applied but not saved: {problem}"
+                            ),
+                        }
+                        settings_changed = true;
+                    }
                 }
             }
 
             if refresh {
-                self.sweep();
+                self.sweep(if rescan {
+                    Patience::Asked
+                } else {
+                    Patience::Scheduled
+                });
             } else if settings_changed {
                 // A settings change reaches the window and the tray now, from the readings
                 // already in hand: a sweep would take seconds and change nothing.
@@ -169,13 +202,18 @@ impl DeviceWorker {
     }
 
     /// One discovery pass: read every device, publish it, and hand out what is worth saying.
-    fn sweep(&mut self) {
+    fn sweep(&mut self, patience: Patience) {
         let started = Instant::now();
-        let alerts = self.monitor.refresh();
+        let alerts = self.monitor.refresh_with(patience);
         eprintln!(
-            "[devices] {} device(s) read in {} ms",
+            "[devices] {} device(s) read in {} ms{}",
             self.monitor.snapshot().devices.len(),
-            started.elapsed().as_millis()
+            started.elapsed().as_millis(),
+            if patience == Patience::Asked {
+                " (asked for, so the slow ones were given time)"
+            } else {
+                ""
+            }
         );
         self.publish();
         self.update_tray();
@@ -221,8 +259,10 @@ impl DeviceWorker {
             snapshot: self.monitor.snapshot().clone(),
             notifications_enabled: config.notifications.enabled,
             thresholds_text: thresholds_text(&config.notifications.thresholds),
-            refresh_seconds: config.general.refresh_seconds.max(MIN_REFRESH_SECONDS),
+            refresh_seconds: config.general.refresh_seconds,
             tray_shows_percent: config.ui.tray_shows_percent,
+            close_to_tray: config.general.close_to_tray,
+            config_path: default_path().display().to_string(),
             notice: self.monitor.notices.first().cloned(),
         };
         if self.states.send(state).is_err() {

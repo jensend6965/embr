@@ -12,13 +12,59 @@ pub mod config;
 pub mod policy;
 pub mod view;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use embr_hidpp::discover::{self, DiscoveryReport};
 
 pub use config::{Config, Notifications, default_path};
+pub use embr_hidpp::discover::Patience;
 pub use policy::{Alert, BatteryPolicy, PolicySettings};
 pub use view::{DeviceView, Snapshot, human_age};
+
+/// What the window's close button does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowClose {
+    /// Take the window away and keep running: the devices are still being watched, the tray
+    /// still has them, and a notification can still arrive.
+    Hide,
+    /// Quit. The user asked for the app to be gone, not for it to hide.
+    Quit,
+}
+
+/// The close button, as the user's configuration says it behaves. Kept here rather than in the
+/// window so that "close to tray" is a decision with a name and a test, not an `if` in an event
+/// handler.
+pub fn window_close_action(close_to_tray: bool) -> WindowClose {
+    if close_to_tray {
+        WindowClose::Hide
+    } else {
+        WindowClose::Quit
+    }
+}
+
+/// A sweep is seconds of HID++ traffic and the devices are not ours alone, so no configuration
+/// gets to ask for a faster cadence than this.
+pub const MIN_REFRESH_SECONDS: u64 = 5;
+
+/// With the window closed nothing is being watched, so the devices are left alone for at least
+/// this long: a tray-only battery monitor that talks to a receiver every few seconds is a
+/// battery monitor that costs more than it saves.
+pub const HIDDEN_REFRESH_FLOOR_SECONDS: u64 = 120;
+
+/// How long until the next scheduled sweep.
+///
+/// The user's interval is what they get while the window is open — that is the number they set,
+/// and they set it while looking at the window. Closed, the cadence backs off to at least
+/// [`HIDDEN_REFRESH_FLOOR_SECONDS`], but never to *less* than they asked for: someone who
+/// chose ten minutes does not want to be scanned every two.
+pub fn scheduled_interval(refresh_seconds: u64, window_open: bool) -> Duration {
+    let wanted = refresh_seconds.max(MIN_REFRESH_SECONDS);
+    Duration::from_secs(if window_open {
+        wanted
+    } else {
+        wanted.max(HIDDEN_REFRESH_FLOOR_SECONDS)
+    })
+}
 
 /// Holds the configuration, the battery policy and the latest snapshot.
 #[derive(Debug)]
@@ -85,7 +131,13 @@ impl Monitor {
 
     /// Discover devices, read batteries, and return whatever is worth notifying about.
     pub fn refresh(&mut self) -> Vec<Alert> {
-        self.refresh_from(discover::discover())
+        self.refresh_with(Patience::Scheduled)
+    }
+
+    /// The same, with the waits the caller asks for: a sweep the user asked for gives a device
+    /// that has not answered yet more time before writing it off as not answering.
+    pub fn refresh_with(&mut self, patience: Patience) -> Vec<Alert> {
+        self.refresh_from(discover::discover_with(patience))
     }
 
     /// The same, from an already collected report — the seam the tests use.
@@ -155,6 +207,18 @@ impl Monitor {
     /// Draw the worst battery as a number in the tray icon, or as the battery glyph.
     pub fn set_tray_shows_percent(&mut self, enabled: bool) -> Result<(), String> {
         self.config.ui.tray_shows_percent = enabled;
+        self.save_config()
+    }
+
+    /// Keep running when the window is closed (the tray only), or quit instead.
+    pub fn set_close_to_tray(&mut self, enabled: bool) -> Result<(), String> {
+        self.config.general.close_to_tray = enabled;
+        self.save_config()
+    }
+
+    /// How often the window asks for a fresh reading while it is open.
+    pub fn set_refresh_seconds(&mut self, seconds: u64) -> Result<(), String> {
+        self.config.general.refresh_seconds = seconds.clamp(MIN_REFRESH_SECONDS, 600);
         self.save_config()
     }
 }
@@ -298,5 +362,54 @@ mod tests {
         // Same readings, new setting: the snapshot is re-derived from the report in hand.
         assert_eq!(monitor.snapshot().devices[0].alert_below, Some(45));
         assert_eq!(monitor.snapshot().devices[0].alert_below_effective, 45);
+    }
+
+    #[test]
+    fn the_close_button_hides_the_window_by_default_and_quits_only_when_asked() {
+        let config = Config::default();
+        assert_eq!(
+            window_close_action(config.general.close_to_tray),
+            WindowClose::Hide
+        );
+
+        let mut quit_on_close = Config::default();
+        quit_on_close.general.close_to_tray = false;
+        assert_eq!(
+            window_close_action(quit_on_close.general.close_to_tray),
+            WindowClose::Quit,
+            "the option is what decides; nothing else is consulted"
+        );
+    }
+
+    #[test]
+    fn the_window_open_cadence_is_what_the_user_asked_for() {
+        assert_eq!(
+            scheduled_interval(30, true),
+            Duration::from_secs(30),
+            "an open window is scanned at the interval the user set"
+        );
+        assert_eq!(
+            scheduled_interval(1, true),
+            Duration::from_secs(MIN_REFRESH_SECONDS),
+            "and never faster than a sweep can be"
+        );
+    }
+
+    #[test]
+    fn a_closed_window_lets_the_devices_alone() {
+        assert_eq!(
+            scheduled_interval(30, false),
+            Duration::from_secs(HIDDEN_REFRESH_FLOOR_SECONDS),
+            "a tray-only app does not scan every 30 seconds"
+        );
+        assert_eq!(
+            scheduled_interval(600, false),
+            Duration::from_secs(600),
+            "a cadence the user set slower than the floor is left alone"
+        );
+        assert!(
+            scheduled_interval(60, false) > scheduled_interval(60, true),
+            "closing the window is what slows the scans down"
+        );
     }
 }

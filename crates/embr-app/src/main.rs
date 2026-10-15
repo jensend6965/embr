@@ -30,10 +30,10 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Instant, SystemTime};
 
-use embr_core::Alert;
-use slint::{Model, ModelRc, VecModel};
+use embr_core::{WindowClose, window_close_action};
+use slint::{CloseRequestResponse, Model, ModelRc, VecModel};
 
-use messages::{Command, UiRequest, UiState};
+use messages::{Command, Notice, UiRequest, UiState, dispatch_note};
 
 /// The last thing the device thread said, kept so the details card and the ages can be drawn
 /// again between refreshes.
@@ -43,16 +43,16 @@ type Selection = Rc<RefCell<Option<String>>>;
 
 /// The last value pushed into every control the user can also move.
 ///
-/// A `Switch` fires when its value changes — including when we are the ones changing it — and
-/// the alert level must not be dragged back to the old number while the user is still moving
-/// it. "What is still in flight?" is what tells a user's action from our own echo.
+/// A `Switch` fires when its value changes — including when we are the ones changing it — and a
+/// number the user is moving must not be dragged back to the old one by a snapshot taken before
+/// their edit. "What is still in flight?" is what tells a user's action from our own echo.
 #[derive(Clone)]
 struct Pushed {
     notifications: Rc<Cell<bool>>,
     tray_percent: Rc<Cell<bool>>,
-    /// An alert level the user set that the device thread has not confirmed yet; `-1` when
-    /// there is nothing in flight.
-    alert_pending: Rc<Cell<i32>>,
+    close_to_tray: Rc<Cell<bool>>,
+    alert_pending: Pending,
+    refresh_pending: Pending,
 }
 
 impl Pushed {
@@ -60,21 +60,61 @@ impl Pushed {
         Self {
             notifications: Rc::new(Cell::new(false)),
             tray_percent: Rc::new(Cell::new(false)),
-            alert_pending: Rc::new(Cell::new(-1)),
+            close_to_tray: Rc::new(Cell::new(true)),
+            alert_pending: Pending::new(),
+            refresh_pending: Pending::new(),
         }
+    }
+}
+
+/// A number the user moved, that the device thread has not confirmed yet.
+#[derive(Clone)]
+struct Pending(Rc<Cell<i32>>);
+
+impl Pending {
+    fn new() -> Self {
+        Self(Rc::new(Cell::new(-1)))
+    }
+
+    /// Remember what the user just set.
+    fn set(&self, value: i32) {
+        self.0.set(value);
+    }
+
+    /// Whether a value arriving from the device thread may be written into the widget: yes when
+    /// it is the one the user set (the round trip is done, so it is confirmed and forgotten), and
+    /// yes when nothing is in flight at all. No while an edit is outstanding and this is some
+    /// older number — that is the one that would drag the value back.
+    fn may_set(&self, value: i32) -> bool {
+        let pending = self.0.get();
+        if pending == value {
+            self.0.set(-1);
+            return true;
+        }
+        pending < 0
     }
 }
 
 fn main() -> Result<(), slint::PlatformError> {
     let launched = Instant::now();
+
     let window = AppWindow::new()?;
     // Created up front and shown on demand: a Slint window is cheap when it is not visible,
     // and creating one from inside an event handler is a good way to find edge cases.
     let about = AboutWindow::new()?;
 
+    // The Wayland app id, and the X11 `WM_CLASS`: what a panel, a task switcher and a
+    // `.desktop` file match a window against. Slint hands it to winit only when it is set, so
+    // without this line the window is anonymous — no icon next to it, and no way to pin it.
+    // It has to come after the components exist (Slint has no context to set it on until then)
+    // and before the window is shown, which is when the platform window is actually created.
+    if let Err(problem) = slint::set_xdg_app_id("embr") {
+        eprintln!("[app] could not set the XDG app id: {problem}");
+    }
+
     let (commands, command_queue) = mpsc::channel::<Command>();
     let (states, state_queue) = mpsc::channel::<UiState>();
-    let (alerts, alert_queue) = mpsc::channel::<Alert>();
+    let (notices, notice_queue) = mpsc::channel::<Notice>();
     let (requests, request_queue) = mpsc::channel::<UiRequest>();
 
     // --- the tray: registered normally, drawn only if Noctalia has it pinned (see README) ---
@@ -87,11 +127,13 @@ fn main() -> Result<(), slint::PlatformError> {
     );
 
     // --- the threads that are allowed to be slow ---
-    match notify::spawn(alert_queue, requests.clone()) {
+    match notify::spawn(notice_queue, requests.clone()) {
         Ok(_) => {}
         Err(problem) => eprintln!("[app] no notification thread: {problem}"),
     }
-    match worker::spawn(command_queue, states, alerts, Some(tray_handle)) {
+    // The window keeps its own handle so hiding it can say so out loud; the device thread gets
+    // a clone of the same sender.
+    match worker::spawn(command_queue, states, notices.clone(), Some(tray_handle)) {
         Ok(_) => {}
         Err(problem) => eprintln!("[app] no device thread: {problem} — the window will stay empty"),
     }
@@ -103,19 +145,10 @@ fn main() -> Result<(), slint::PlatformError> {
     let latest: SharedState = Rc::new(RefCell::new(None));
     let selection: Selection = Rc::new(RefCell::new(None));
     let pushed = Pushed::new();
-
-    window.on_request_refresh({
-        let window = window.as_weak();
-        let commands = commands.clone();
-        move || {
-            if let Some(window) = window.upgrade() {
-                window.set_refreshing(true);
-            }
-            if commands.send(Command::Refresh).is_err() {
-                eprintln!("[app] the device thread has stopped; cannot refresh");
-            }
-        }
-    });
+    // Whether the window is on screen, and when the last sweep was asked for: the two things
+    // the scheduled cadence needs (`core::scheduled_interval` decides what they mean).
+    let window_open = Rc::new(Cell::new(true));
+    let last_refresh = Rc::new(Cell::new(Instant::now()));
 
     window.on_pick({
         let window = window.as_weak();
@@ -232,6 +265,107 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    window.on_close_to_tray_toggled({
+        let commands = commands.clone();
+        let pushed = pushed.clone();
+        move |enabled| {
+            if enabled == pushed.close_to_tray.get() {
+                return;
+            }
+            pushed.close_to_tray.set(enabled);
+            eprintln!(
+                "[app] closing the window will {}",
+                if enabled {
+                    "leave Embr running"
+                } else {
+                    "quit"
+                }
+            );
+            if commands.send(Command::SetCloseToTray(enabled)).is_err() {
+                eprintln!("[app] the device thread has stopped; the choice was not saved");
+            }
+        }
+    });
+
+    window.on_rescan({
+        let window = window.as_weak();
+        let commands = commands.clone();
+        move || {
+            eprintln!("[app] rescan asked for");
+            if let Some(window) = window.upgrade() {
+                window.set_refreshing(true);
+            }
+            // The user is watching, and a device that has just been picked up needs a moment:
+            // this sweep waits longer than a scheduled one before writing anything off.
+            if commands.send(Command::Rescan).is_err() {
+                eprintln!("[app] the device thread has stopped; nothing was rescanned");
+            }
+        }
+    });
+
+    window.on_refresh_seconds_changed({
+        let commands = commands.clone();
+        let pushed = pushed.clone();
+        move |seconds| {
+            let seconds = seconds.clamp(5, 600) as u64;
+            pushed.refresh_pending.set(seconds as i32);
+            eprintln!("[app] a fresh reading every {seconds}s while the window is open");
+            if commands.send(Command::SetRefreshSeconds(seconds)).is_err() {
+                eprintln!("[app] the device thread has stopped; the interval was not saved");
+            }
+        }
+    });
+
+    window.on_quit_requested(|| {
+        eprintln!("[app] quit requested from the window");
+        if let Err(problem) = slint::quit_event_loop() {
+            eprintln!("[app] could not stop the event loop: {problem}");
+        }
+    });
+
+    // The close button. With "close to tray" on — the default — the window goes away and the
+    // app does not: the devices keep being read, the tray keeps its menu and a low battery can
+    // still be announced. With it off, the close button means what it says.
+    window.window().on_close_requested({
+        let latest = latest.clone();
+        let notices = notices.clone();
+        let window_open = window_open.clone();
+        let last_refresh = last_refresh.clone();
+        let said_so = Rc::new(Cell::new(false));
+        move || {
+            let close_to_tray = latest
+                .borrow()
+                .as_ref()
+                .is_some_and(|state| state.close_to_tray);
+            match window_close_action(close_to_tray) {
+                WindowClose::Hide => {
+                    eprintln!("[app] window hidden; Embr keeps running in the tray");
+                    // A closed window is not being watched, so the scans slow right down.
+                    window_open.set(false);
+                    last_refresh.set(Instant::now());
+                    if !said_so.replace(true) {
+                        // Nothing else on screen says the app is still there, and the tray
+                        // icon is the only way back on a bar that has not pinned it.
+                        dispatch_note(
+                            &notices,
+                            "Embr is still running",
+                            "Closing the window leaves it watching in the background. Reopen it \
+                             from the tray icon, or quit from the tray's menu.",
+                        );
+                    }
+                    CloseRequestResponse::HideWindow
+                }
+                WindowClose::Quit => {
+                    eprintln!("[app] closing Embr (close to tray is off)");
+                    if let Err(problem) = slint::quit_event_loop() {
+                        eprintln!("[app] could not stop the event loop: {problem}");
+                    }
+                    CloseRequestResponse::HideWindow
+                }
+            }
+        }
+    });
+
     window.on_show_about({
         let about = about.as_weak();
         move || {
@@ -275,16 +409,31 @@ fn main() -> Result<(), slint::PlatformError> {
         let selection = selection.clone();
         let rows = rows.clone();
         let pushed = pushed.clone();
+        let commands = commands.clone();
+        let window_open = window_open.clone();
+        let last_refresh = last_refresh.clone();
         move || {
             // 1. What the tray or a notification asked the window to do.
             while let Ok(request) = request_queue.try_recv() {
                 match request {
                     UiRequest::ShowWindow => {
                         if let Some(window) = window.upgrade() {
+                            // The tray's item is called "Show devices", and the notification's
+                            // action says the same: whoever asked for the window wants the
+                            // devices, not whichever page they left it on.
+                            window.set_view(0);
                             if let Err(problem) = window.show() {
                                 eprintln!("[app] could not show the window: {problem}");
                             }
                             window.window().set_minimized(false);
+                        }
+                        // And they want today's numbers, not the ones from whenever the window
+                        // was last open: a read the moment it appears, with the longer waits a
+                        // device that has been asleep needs.
+                        window_open.set(true);
+                        last_refresh.set(Instant::now());
+                        if commands.send(Command::Rescan).is_err() {
+                            eprintln!("[app] the device thread has stopped; nothing was read");
                         }
                     }
                     UiRequest::Quit => {
@@ -305,6 +454,30 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(window) = window.upgrade() {
                 tick_ages(&window, &latest, &selection, &rows);
             }
+
+            // 4. The sweep the application schedules for itself: the interval the user chose
+            // while the window is open, and a much slower one while it is only a tray icon.
+            // `core::scheduled_interval` decides the number; this only counts.
+            let seconds = latest
+                .borrow()
+                .as_ref()
+                .map(|state| state.refresh_seconds)
+                .unwrap_or(60);
+            let interval = embr_core::scheduled_interval(seconds, window_open.get());
+            if last_refresh.get().elapsed() >= interval {
+                last_refresh.set(Instant::now());
+                eprintln!(
+                    "[app] scheduled sweep ({}s, window {})",
+                    interval.as_secs(),
+                    if window_open.get() { "open" } else { "closed" }
+                );
+                if let Some(window) = window.upgrade() {
+                    window.set_refreshing(true);
+                }
+                if commands.send(Command::Refresh).is_err() {
+                    eprintln!("[app] the device thread has stopped; nothing was refreshed");
+                }
+            }
         }
     });
 
@@ -313,7 +486,11 @@ fn main() -> Result<(), slint::PlatformError> {
         "[app] window shown {} ms after launch",
         launched.elapsed().as_millis()
     );
-    if let Err(problem) = slint::run_event_loop() {
+    // `run_event_loop_until_quit` rather than `run_event_loop`: with close-to-tray on, hiding
+    // the window is not quitting, and `run_event_loop` would end the program the moment the
+    // last window is hidden (it only knows about windows and Slint's own tray icon, and the
+    // tray here belongs to another thread). Every way out calls `quit_event_loop`.
+    if let Err(problem) = slint::run_event_loop_until_quit() {
         eprintln!("[app] the event loop ended with {problem}");
     }
     eprintln!("[app] the event loop has returned; exiting");
@@ -356,14 +533,17 @@ fn apply(
             .collect::<Vec<_>>(),
     );
 
-    window.set_refresh_seconds(state.refresh_seconds as i32);
     window.set_thresholds_text(state.thresholds_text.clone().into());
+    window.set_config_path(state.config_path.clone().into());
     window.set_notice(state.notice.clone().unwrap_or_default().into());
     pushed.notifications.set(state.notifications_enabled);
     window.set_notifications_enabled(state.notifications_enabled);
     pushed.tray_percent.set(state.tray_shows_percent);
     window.set_tray_percent(state.tray_shows_percent);
+    pushed.close_to_tray.set(state.close_to_tray);
+    window.set_close_to_tray(state.close_to_tray);
     apply_alert_level(window, &state, selection, pushed);
+    apply_refresh_interval(window, &state, pushed);
     window.set_refreshing(false);
 
     *latest.borrow_mut() = Some(state);
@@ -389,18 +569,23 @@ fn apply_alert_level(window: &AppWindow, state: &UiState, selection: &Selection,
         })
         .unwrap_or((20, false));
 
-    let pending = pushed.alert_pending.get();
-    if pending == level {
-        // The device thread has agreed with what the user set: nothing is in flight any more.
-        pushed.alert_pending.set(-1);
-    } else if pending >= 0 {
+    let pending = &pushed.alert_pending;
+    if !pending.may_set(level) {
+        // A snapshot from before the user's edit: it must not drag the box back.
         return;
     }
-
     if window.get_alert_level() != level {
         window.set_alert_level(level);
     }
     window.set_alert_custom(custom);
+}
+
+/// The same, for the interval the window refreshes itself at while it is open.
+fn apply_refresh_interval(window: &AppWindow, state: &UiState, pushed: &Pushed) {
+    let seconds = i32::try_from(state.refresh_seconds).unwrap_or(60);
+    if pushed.refresh_pending.may_set(seconds) && window.get_refresh_seconds() != seconds {
+        window.set_refresh_seconds(seconds);
+    }
 }
 
 /// Draw the selected device from the latest snapshot. Safe to call at any time: without a

@@ -27,6 +27,10 @@ notifications.
   did not answer is *Not answering*; a percentage worked out from voltage is marked `~`, and a
   percentage a device reports itself always wins.
 * **Worst battery first**, with the age of each reading beside it.
+* **A cadence that matches what you are doing.** While the window is open the devices are read
+  at the interval you choose; with the window closed it backs off to no more than once every two
+  minutes, and reads everything the moment the window comes back. **Rescan** reads now, and gives
+  a device that has been asleep longer to answer before writing it off as *Not answering*.
 * **Tray icon and notifications.** The icon is a battery coloured by the worst device — or the
   worst level itself, as a number, if you would rather read it than measure it. Notifications stay
   off until you switch them on; then they have thresholds, hysteresis, one-per-crossing
@@ -34,8 +38,12 @@ notifications.
 * **A threshold of its own for any device** you ask for one. A headset and a mouse do not drain at
   the same rate, so a device with its own level watches that level instead of the shared pair; set
   it next to the device it belongs to, and `Default` puts it back.
-* **A settings pane** for those levels, the refresh interval and the two switches, saved to
-  `~/.config/embr/config.toml`.
+* **Close to tray**: closing the window leaves Embr watching in the background rather than
+  quitting, so a low battery is still announced with nothing on screen. Turn it off in Settings
+  and the close button means what it says. There is a Quit button there too, for a machine whose
+  panel does not draw the tray item.
+* **A settings page** for those levels, the tray icon, the close behaviour, the refresh interval
+  and the notification switch, saved to `~/.config/embr/config.toml`.
 
 ## Install
 

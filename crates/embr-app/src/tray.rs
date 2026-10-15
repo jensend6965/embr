@@ -89,8 +89,10 @@ impl EmbrTray {
     }
 
     fn refresh(&self) {
-        if self.commands.send(Command::Refresh).is_err() {
-            eprintln!("[tray] the device thread has stopped; cannot refresh");
+        // A menu click is the user asking, exactly like the Rescan button: the sweep that
+        // follows gives a device that has not answered yet the longer waits.
+        if self.commands.send(Command::Rescan).is_err() {
+            eprintln!("[tray] the device thread has stopped; cannot rescan");
         }
     }
 }
@@ -202,7 +204,7 @@ impl Tray for EmbrTray {
         items.push(MenuItem::Separator);
         items.push(
             StandardItem {
-                label: "Refresh".to_string(),
+                label: "Rescan".to_string(),
                 activate: Box::new(|tray: &mut Self| tray.refresh()),
                 ..Default::default()
             }
