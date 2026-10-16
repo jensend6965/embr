@@ -12,18 +12,22 @@ pub mod config;
 pub mod policy;
 pub mod view;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use embr_hidpp::discover::{self, DiscoveryReport};
 
 pub use config::{
-    Config, DIM, LEVEL_COLORS, Notifications, TrayLook, TrayStyle, TrayTextColor, WHITE,
-    default_path, level_color,
+    Config, DIM, LEVEL_COLORS, LOW_AT_OR_BELOW, Level, MEDIUM_AT_OR_BELOW, Notifications, Theme,
+    TrayLook, TrayStyle, TrayTextColor, WHITE, default_path, level_band, level_color,
 };
 pub use embr_hidpp::Uevents;
 pub use embr_hidpp::discover::Patience;
 pub use policy::{Alert, BatteryPolicy, PolicySettings};
-pub use view::{DeviceView, Snapshot, TrayIcon, human_age, tray_icons};
+pub use view::{
+    DevicePages, DeviceView, FeaturePage, Snapshot, TrayIcon, human_age, pages_for, snooze_caption,
+    summary_text, thresholds_text, tray_icons, tray_style_caption,
+};
 
 /// What the window's close button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +138,11 @@ pub struct Monitor {
     /// The last discovery report, kept so that a changed setting can be shown in the window
     /// without going back to the hardware for a number nothing has changed about.
     last_report: Option<DiscoveryReport>,
+    /// The pages each device has, from the feature set it advertised. A feature set is an
+    /// inventory rather than a reading, so it is read when a window first asks about a device
+    /// and kept: reading it costs twenty-odd calls on a keyboard, and repeating that every
+    /// minute would be spending the devices' batteries on a fact that cannot have changed.
+    pages: HashMap<String, DevicePages>,
     /// Problems to show the user once (a bad config file, a receiver that did not answer).
     pub notices: Vec<String>,
 }
@@ -151,6 +160,7 @@ impl Monitor {
             policy,
             snapshot,
             last_report: None,
+            pages: HashMap::new(),
             notices,
         }
     }
@@ -209,16 +219,68 @@ impl Monitor {
             }
         }
         // Devices that vanished should not keep their state forever: a re-pairing is a new
-        // battery cycle. Anything not in this report is forgotten.
+        // battery cycle. Anything not in this report is forgotten — and with it the feature set
+        // we read from it, which the device it belonged to will answer for again.
         let present: Vec<&str> = report.devices.iter().map(|d| d.key.as_str()).collect();
         for key in self.policy.known_keys() {
             if !present.contains(&key.as_str()) {
                 self.policy.reset(&key);
             }
         }
+        self.pages.retain(|key, _| present.contains(&key.as_str()));
         self.snapshot = Snapshot::from_report(&report, &self.config);
+        self.apply_pages();
         self.last_report = Some(report);
         alerts
+    }
+
+    /// Give every device in the current snapshot the pages it advertised, where we know them.
+    fn apply_pages(&mut self) {
+        for device in &mut self.snapshot.devices {
+            if let Some(pages) = self.pages.get(&device.key) {
+                device.pages = Some(pages.pages.clone());
+                device.pages_partial = !pages.complete();
+            }
+        }
+    }
+
+    /// Ask one device what it advertises, and remember the answer.
+    ///
+    /// This opens the device, so it is the device thread's work, not the window's, and it is
+    /// asked for a device at a time — the one the user has just opened. `None` means the device
+    /// could not be reached, which is a different thing from a device that advertises nothing.
+    pub fn read_pages(&mut self, key: &str) -> Option<DevicePages> {
+        let device = self
+            .last_report
+            .as_ref()?
+            .devices
+            .iter()
+            .find(|device| device.key == key)?
+            .clone();
+        // Whoever asked is waiting for it, so give a device that is slow to wake the longer
+        // wait: this is one round trip per feature, and half of it timing out is worse than
+        // waiting.
+        let capabilities = discover::capabilities_of(&device, Patience::Asked)?;
+        if !capabilities.answered() {
+            // It was reachable and said nothing about its own feature set — which is not the same
+            // as having no features, and must not be cached as if it were. The rail then says the
+            // device did not answer, and the next ask (Rescan) tries again.
+            return None;
+        }
+        let pages = DevicePages {
+            pages: pages_for(
+                &capabilities
+                    .features
+                    .iter()
+                    .map(|(feature, _)| *feature)
+                    .collect::<Vec<_>>(),
+            ),
+            declared: capabilities.declared,
+            silent: capabilities.silent,
+        };
+        self.pages.insert(key.to_string(), pages.clone());
+        self.apply_pages();
+        Some(pages)
     }
 
     /// Re-derive the snapshot from the readings already in hand, after the configuration
@@ -227,6 +289,7 @@ impl Monitor {
     pub fn rebuild(&mut self) {
         if let Some(report) = self.last_report.take() {
             self.snapshot = Snapshot::from_report(&report, &self.config);
+            self.apply_pages();
             self.last_report = Some(report);
         }
     }
@@ -291,6 +354,32 @@ impl Monitor {
     /// Keep running when the window is closed (the tray only), or quit instead.
     pub fn set_close_to_tray(&mut self, enabled: bool) -> Result<(), String> {
         self.config.general.close_to_tray = enabled;
+        self.save_config()
+    }
+
+    /// Which colour scheme the window should use, and remember the choice.
+    pub fn set_theme(&mut self, theme: Theme) -> Result<(), String> {
+        self.config.ui.theme = theme.as_str().to_string();
+        self.save_config()
+    }
+
+    /// Whether the readouts carry the voltage next to the percentage.
+    pub fn set_show_voltage(&mut self, show: bool) -> Result<(), String> {
+        self.config.ui.show_voltage = show;
+        self.save_config()
+    }
+
+    /// Whether a reading is drawn in the colour of its level.
+    pub fn set_level_colors(&mut self, colors: bool) -> Result<(), String> {
+        self.config.ui.level_colors = colors;
+        self.rebuild();
+        self.save_config()
+    }
+
+    /// Whether a percentage we inferred from voltage is marked as approximate.
+    pub fn set_mark_estimates(&mut self, mark: bool) -> Result<(), String> {
+        self.config.ui.mark_estimates = mark;
+        self.rebuild();
         self.save_config()
     }
 

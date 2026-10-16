@@ -13,7 +13,7 @@ use std::thread;
 
 use notify_rust::{Notification, Timeout, Urgency};
 
-use crate::messages::{Notice, UiRequest};
+use crate::{Notice, TrayAction};
 
 const APP_NAME: &str = "Embr";
 /// The identifier of the notification's action button, as the notification server sees it.
@@ -24,19 +24,19 @@ const NOTIFICATION_TIMEOUT_MS: u32 = 8000;
 /// keep working, the user simply hears nothing.
 pub fn spawn(
     notices: Receiver<Notice>,
-    ui: Sender<UiRequest>,
+    actions: Sender<TrayAction>,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name("notifications".to_string())
         .spawn(move || {
             for notice in notices {
-                let ui = ui.clone();
+                let actions = actions.clone();
                 // One thread per notice: a notification left open on screen must not hold up
                 // the next one. Alerts are rate-limited in `core`, so this cannot pile up.
                 let unshown = notice.clone();
                 let started = thread::Builder::new()
                     .name("notification".to_string())
-                    .spawn(move || send(&notice, &ui));
+                    .spawn(move || send(&notice, &actions));
                 if let Err(problem) = started {
                     eprintln!(
                         "[notify] could not start a notification thread ({problem}); not shown: {}",
@@ -59,7 +59,7 @@ fn spoken(notice: &Notice) -> String {
     }
 }
 
-fn send(notice: &Notice, ui: &Sender<UiRequest>) {
+fn send(notice: &Notice, actions: &Sender<TrayAction>) {
     let (title, body, actionable) = match notice {
         Notice::Alert(alert) => {
             let (title, body) = alert.title_and_body();
@@ -97,7 +97,8 @@ fn send(notice: &Notice, ui: &Sender<UiRequest>) {
             handle.wait_for_action(|action| {
                 if action == SHOW_DEVICES_ACTION {
                     eprintln!("[notify] \"Show devices\" chosen");
-                    if ui.send(UiRequest::ShowWindow).is_err() {
+                    let show = TrayAction::ShowWindow { key: None };
+                    if actions.send(show).is_err() {
                         eprintln!("[notify] the window is gone");
                     }
                 }

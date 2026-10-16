@@ -5,32 +5,36 @@
 # window is raised by the KWin script next to this one so `spectacle -a` captures the app rather
 # than whatever else happens to be focused.
 #
-#   ./shot.sh <sandbox-config-dir> <out.png> [settings|devices] [scroll-pixels]
+#   ./shot.sh <sandbox-config-dir> <out.png> [devices|settings|<page id>]
+#
+# `devices` is the window as it opens. `settings` opens the settings dialog at startup. Anything
+# else is a page id (`battery`, `dpi`, `lighting`, `buttons`, `profiles`, `host`, `device`) and
+# opens the window on that page of the first device — it waits for the device's feature set, and a
+# page the device does not have will not be shown.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BIN="$HERE/../../target/release/embr"
 SANDBOX="${1:?a sandbox config dir is needed}"
 OUT="${2:?an output png is needed}"
-PAGE="${3:-settings}"
-SCROLL="${4:-0}"
+PAGE="${3:-devices}"
 
 mkdir -p "$SANDBOX/embr"
 [[ -f "$SANDBOX/embr/config.toml" ]] || : > "$SANDBOX/embr/config.toml"
 
-PAGE_FLAG=0
-[[ "$PAGE" == settings ]] && PAGE_FLAG=1
-
-# The debug switch is read with `is_some()`, so it must be *absent* for the other pages, not "0".
+# Each switch is read with `is_some()`, so it must be *absent* when it is not wanted, not "0".
 EXTRA=()
-[[ "$PAGE_FLAG" == 1 ]] && EXTRA=(EMBR_DEBUG_SETTINGS=1)
+case "$PAGE" in
+    settings) EXTRA=(EMBR_DEBUG_SETTINGS=1) ;;
+    devices) ;;
+    *) EXTRA=("EMBR_DEBUG_PAGE=$PAGE") ;;
+esac
 
-env XDG_CONFIG_HOME="$SANDBOX" EMBR_DEBUG_SCROLL="$SCROLL" "${EXTRA[@]}" \
-    "$BIN" > "$SANDBOX/app.log" 2>&1 &
+env XDG_CONFIG_HOME="$SANDBOX" "${EXTRA[@]}" "$BIN" > "$SANDBOX/app.log" 2>&1 &
 APP=$!
 trap 'kill "$APP" 2>/dev/null || true' EXIT
 
-# Wait for a sweep to have been logged: the window is up by then, and the devices page has content.
+# Wait for a sweep to have been logged: the window is up by then, and the rail has content.
 for _ in $(seq 1 90); do
     grep -q "device(s) read" "$SANDBOX/app.log" 2>/dev/null && break
     sleep 0.5

@@ -1,12 +1,15 @@
 # `embr` — the desktop app
 
-The window for the Logitech device monitor: the device list with battery bars, a details
-card, a settings page, a tray icon and desktop notifications. Binary name **`embr`**.
+The window for the Logitech device monitor: a rail of devices, a page per subject, a settings
+dialog, a tray icon and desktop notifications. Binary name **`embr`**.
 
 It draws what `embr-core` gives it and decides nothing: the device list, the percentage text
-(including the `~` that marks a value inferred from voltage), the status label, the alert
-level the settings spin box shows, the tray tooltip and the ages (`12s ago`) all come from the
-`embr-core` crate.
+(including the `~` that marks a value inferred from voltage), the status label, the pages a device
+has, the alert level, the tray tooltip and the ages (`12s ago`) all come from `embr-core`. The tray
+icons and the notifications come from `embr-desktop`, which is toolkit-free D-Bus code.
+
+The window is written with **GTK 4 + libadwaita** (`gtk4-rs`). It was Slint until the port finished;
+`spikes/004-gtk4-gui/README.md` has what the two toolkits cost and give, measured.
 
 ## How to run it
 
@@ -15,168 +18,94 @@ export PATH=$HOME/.cargo/bin:$PATH
 cargo run --release -p embr       # or: ./target/release/embr
 ```
 
-No root, no daemon, no system package: access to `/dev/hidraw*` comes from upstream's udev
-rule (`TAG+="uaccess"`), so a user-session program can own the devices. `embr` also sets its
-XDG app id (`slint::set_xdg_app_id("embr")`) so a `.desktop` entry and the icon theme can find
-it — see the repository README for the install steps.
-
 ## What it does
 
-* **Refreshes on a cadence that matches what you are doing.** While the window is open it sweeps
-  every `general.refresh_seconds` (5–600 s, default 60 s, editable on the settings page); with
-  the window closed it backs off to at least every two minutes; and it sweeps the moment the
-  window comes back. `core::scheduled_interval` decides those numbers — the UI thread only
-  counts. A sweep of two receivers takes seconds, so it runs on its own thread: the window stays
-  painted, the ages keep ticking, and the rows keep showing the previous reading while a sweep is
-  in flight.
-* **Asks every device whether it is still there, every five seconds, while the window is open.**
-  A sweep on the user's interval is far too rare to notice a device *switching off* — the kernel
-  says nothing when a headset is powered down behind its dongle, which is the one case the uevents
-  below cannot see — so between sweeps Embr asks each device one question with deadlines short
-  enough to ask it again a few seconds later: 250 ms for the liveness ping, 700 ms for the battery
-  question (`Patience::Watch`). This is not the expensive kind of polling: a device that is there
-  answers in single-digit milliseconds, and one that has gone costs its deadline and no more. It is
-  `general.watch_devices` (on by default, a switch on the settings page) and it runs only while the
-  window is open — nobody is looking at a tray icon to see a device leave, and a tray-only Embr
-  stays as quiet towards the devices as it was before this existed.
-* **Gives up on a device that has not answered after one timeout.** A device that is switched off
-  answers nothing, and every call to it costs its whole deadline — so asking a silent device for a
-  name and then for four battery features spends six timeouts learning the same silence six times.
-  Two things stop that: the first question to a device is a single liveness ping on ROOT, and a
-  device that says nothing to it is written off for that pass (`discover::there`); and the report
-  size a device answers at (long or short HID++ reports — a device property, not a channel's) is
-  remembered for the life of the process instead of being rediscovered, at the price of a timeout,
-  on every pass (`transport::preferences`). Measured on this machine with a headset switched off
-  and two paired devices asleep: a scheduled sweep went from 20 s to 7 s, a Rescan from 39 s to
-  15 s, and a watch pass from 7 s to 2 s — with the headset itself costing 700 ms, one deadline.
-* **Rescan** (the header button, and the tray menu's item of the same name) is a *thorough*
-  sweep: it reads everything now and gives the devices that have not answered yet the longer
-  waits (`Patience::Asked`) that a device coming back from sleep needs, so a row that said *Not
-  answering* can turn into a reading instead of waiting for the next interval.
-* **It uses the width it is given.** The window opens at 1000×660 (`preferred-width`/
-  `preferred-height`, not `width`/`height` — a plain `width:` is a binding on the window's size, so
-  the frame can grow while the layout stays at its opening width and the extra space is painted in
-  the background colour) and the layout is written in terms of the space it has, so dragging it
-  wider moves the panes. The device list grows to 470 px and stops, the detail card takes
-  everything else, and the settings page runs its rows the full width with each control at the far
-  right — the shape Solaar has when maximised. Two floors keep it honest: the list needs 380 px for
-  a row's own content and the card 260 px for its tiles and the alert row, so below about 700 px
-  they cannot both fit. The window's own size is logged when it changes
-  (`[app] window 1646x960 (physical)`), which is the only way to tell "the layout adapted" from
-  "the frame grew around a layout that did not".
+* **Refreshes on a cadence that matches what you are doing.** While the window is open it reads
+  every device every `general.refresh_seconds` (5–600 s, default 60 s, editable in Settings); with
+  the window closed it backs off to at least every two minutes; and it reads the moment the window
+  comes back — with the longer waits a device that has been asleep needs. `core::scheduled_interval`
+  decides those numbers; the window only counts. A sweep of two receivers takes seconds, so it runs
+  on its own thread: the window stays painted, the ages keep ticking, and the rows keep showing the
+  previous reading while a sweep is in flight.
+* **Asks every device whether it is still there, every five seconds, while the window is open.** A
+  sweep on the user's interval is far too rare to notice a device *switching off* — the kernel says
+  nothing when a headset is powered down behind its dongle — so between sweeps each device gets one
+  short question (`Patience::Watch`, 250 ms for the liveness ping). A device that is there answers in
+  single-digit milliseconds; one that has gone costs its deadline and nothing more. It is
+  `general.watch_devices` (on by default, a switch in Settings) and it runs only while the window is
+  open: nobody reads a tray icon to watch a device leave.
+* **Gives up on a device that has not answered after one timeout**, remembers the report size each
+  device answers at, and repeats a sweep that could not read everything after 10, 20, 40, 80 seconds
+  (`core::retry_interval`) while the window is open. Measured on this machine with a headset switched
+  off and two paired devices asleep: a scheduled sweep 20 s → 7 s, a Rescan 39 s → 15 s, a watch pass
+  7 s → 2 s.
+* **Rescan** (the header button, and the tray menu's item of the same name) is a *thorough* read: it
+  gives a device that has not answered yet the longer waits a device coming back from sleep needs, so
+  a row that said *Not answering* can turn into a reading instead of waiting for the next interval.
 * **Notices a device arriving or leaving by itself.** `embr-hidpp::Uevents` listens on the kernel's
-  uevent group — a netlink socket any user may bind to, so there is no daemon to install, no
-  `libudev` linkage and no helper process — and the UI thread drains it on every tick. A paired
-  device waking up, a receiver being plugged in, a headset being unplugged: the kernel has already
-  seen it, and the sweep that follows is the same sweep the schedule would have run. This is
-  deliberately *not* polling the hardware to ask whether anything changed: on a wireless device
-  every such question is a wake-up, and a battery monitor that spends the batteries is a bad one.
-* **And asks again soon about a device that did not answer.** A sleeping device has not gone
-  anywhere, so a sweep that could not read everything is repeated after ten seconds, then twenty,
-  forty, eighty (`core::retry_interval`) — while the window is open, because that is when somebody
-  is looking at it. With the watch above switched on, this ladder steps aside: a full sweep every
-  ten seconds and a watch pass every five are the same question asked twice, and the sweep is the
-  expensive way to ask it. With the window closed the two-minute floor stands and the uevent above
-  is what catches a device really coming back; there is no point in waking a sleeping device every
-  ten seconds to redraw a tooltip nobody is reading.
-* **Says *Not answering* when nothing answered, even if a dongle did.** The G733's dongle replies
-  to a ping in 2 ms whether the headset behind it is on or off, so a ping is not evidence about the
-  device — the battery question is. A timeout in answer to *that* is silence, and silence is not
-  *Connected* (`discover::answered`): it is the difference between a row that quietly kept its old
-  percentage and a switched-off headset that says so.
-* **Between sweeps it holds no device open.** `Monitor::refresh_with()` opens what each query
-  needs and closes it again before returning.
-* **Snooze** lives in the details card, under the alert level, and calls
-  `Monitor::snooze(device.key)`; the *Battery notifications* switch calls
-  `Monitor::set_notifications_enabled()` and persists the choice through
-  `core`'s own config writer. Notifications are **off until the user turns them on** — that is
-  the default and this app never overrides it.
-* **Notifications** carry the title and body from `Alert::title_and_body()` plus a
-  *Show devices* action, and are sent from their own thread, so a slow D-Bus round trip cannot
-  freeze the window. While notifications are off, what a user *would* have been told is
-  written to stderr instead of being silently dropped. The same channel carries the app's own
-  one-line notices (`Notice::Text`), such as the first time the window is hidden with
-  close-to-tray on.
-* **Close to tray.** With `general.close_to_tray` on (the default) the close button hides the
-  window and the app keeps running: the device thread keeps sweeping, the tray keeps its menu and
-  a low battery is still announced. The event loop is `run_event_loop_until_quit()` for exactly
-  this reason — `run_event_loop()` returns when the last window is hidden, because it counts
-  windows and Slint's own tray icon, and this app's tray item belongs to `ksni` on another thread.
-  With the option off, the close button quits.
+  uevent group — a netlink socket any user may bind to, so there is no daemon to install and no
+  `libudev` linkage — and the UI thread drains it on every tick.
+* **Says *Not answering* when nothing answered, even if a dongle did.** The G733's dongle replies to
+  a ping in 2 ms whether the headset behind it is on or off, so a ping is not evidence about the
+  device — the battery question is (`discover::answered`).
+* **One level deeper than a flat list: device → subject.** The rail is the devices; the selected one
+  expands to show the pages *it* has, and the right pane is the page you picked. The page list comes
+  from each device's own `FEATURE SET {0001}` (`core::pages_for`, read once per device and kept), so
+  the rail cannot offer the G913 keyboard a DPI page it has no feature for. Two things are said out
+  loud rather than hidden: a device that never answered about its features says **Features not read**
+  (and Rescan asks again), and one that answered only *part* of its feature list says **Some features
+  did not answer** — a subset is not the same thing as a device with no lighting.
+* **Two controls write**, both on the Battery page and both through `core`: the device's own
+  low-battery level (a spin box, with *Shared* to put it back on the shared thresholds) and the
+  snooze. A number the user is moving is protected from a snapshot taken before their edit — the page
+  holds still until the snapshot that confirms it arrives.
+* **Settings** is a dialog behind the header's gear: the tray icon (five styles, with the tray's own
+  pixmaps as the previews, and a text colour for the one style that has text), one icon per device,
+  notifications (the switch, the thresholds it uses, the snooze period), the cadence and the watch
+  switch, close-to-tray, Quit, and where the file is written. Notifications are **off until you turn
+  them on** — that is the default and this app never overrides it. While they are off, what a user
+  *would* have been told goes to stderr instead of being silently dropped.
+* **Close to tray.** With `general.close_to_tray` on (the default) the close button hides the window
+  and the app keeps running: the device thread keeps sweeping, the tray keeps its menu and a low
+  battery is still announced. With it off, the close button quits.
 * **Tray icons**: the tooltip is `Snapshot::tray_tooltip()`, and the pictograms are drawn in code as
-  22×22 ARGB32 pixmaps — one function per style in `tray.rs`, chosen by `ui.tray_style`
+  22×22 ARGB32 pixmaps — one function per style in `embr-desktop::tray`, chosen by `ui.tray_style`
   (`core::TrayStyle`): a battery, the same battery standing on end, the level as digits, a ring whose
   arc is the level, and *level and status* — the battery with a bolt while charging and a mark for a
-  device that reports a fault. Every shape that is not text comes from one template — a rounded body
-  and a nub, drawn as a white line two units thick on integer coordinates so it comes out crisp
-  rather than smeared — and the level is how much of the tube is filled, which needs no colour. The
-  percentage style is the one shape with colour at all, and `ui.tray_text_color` (`TrayTextColor`)
-  picks it: *by level* (the default: red, amber, green) or a fixed white, green, amber, red, blue or
-  grey. The settings page's picker shows these very pixmaps as its previews (`tray::preview` →
-  `tray::image`), so what is offered is what the bar draws, and the colour picker only appears under
-  the style that has text to colour. With nothing to read, every style says so with an empty tube.
-  Which icons exist is `core::tray_icons`: nothing chosen means one icon that follows the worst
-  device, and a device the user picked in Settings gets one of its own, each about that device.
-  They register as `embr` and `embr-<device key>`, so a bar that draws only what it has pinned
-  (Noctalia) needs each id added. Left-click shows the window — on that device, for an icon that is
-  about one — a *Devices* submenu lists every device (`NAME — 88% (Discharging)`), plus *Rescan* and
-  *Quit*.
-* **The icon set is shared between two threads, deliberately.** `tray::Icons` is held by the device
-  thread (which decides which icons exist and what they say) *and* by the window, which flips their
-  style the moment the switch moves. Routing a style change through the device thread made the
-  switch wait out whatever sweep was in flight — measured at 827 ms with a rescan running, against
-  29 ms once the window applies it itself. A presentation change has no business queueing behind
+  device that reports a fault. Every shape that is not text comes from one template, drawn on integer
+  coordinates so it comes out crisp rather than smeared, and the level is how much of the tube is
+  filled, which needs no colour. With nothing chosen there is one icon, and it follows the device with
+  the least charge; a device you pick in Settings gets one of its own. They register as `embr` and
+  `embr-<device key>`, so a bar that draws only what it has pinned needs each id added. Left-click
+  shows the window — on that device, for an icon that is about one — and the menu lists every device
+  (`NAME — 88% (Discharging)`), plus *Rescan* and *Quit*.
+* **The icon set is shared between two threads, deliberately.** `embr-desktop::tray::Icons` is held by
+  the device thread (which decides which icons exist and what they say) *and* by the window, which
+  flips their style the moment the picker moves. Routing a style change through the device thread made
+  the switch wait out whatever sweep was in flight — measured at 827 ms with a rescan running, against
+  29 ms once the window applied it itself. A presentation change has no business queueing behind
   device I/O.
-* The **About** window shows the Slint `AboutSlint` widget, which the Slint licence requires.
 
 ### Threads
 
 | Thread | Owns | Never does |
 | --- | --- | --- |
-| UI (main) | everything Slint, and the tray icons' *style* | open a device, read a battery |
-| `devices` | `core::Monitor`, the HID++ work | touch a Slint object |
+| UI (main) | every widget, and the tray icons' *style* | open a device, read a battery, touch D-Bus |
+| `devices` | `core::Monitor`, the HID++ work, which tray icons exist | touch a widget |
 | `notifications` | D-Bus (`notify-rust`) | touch the window |
 | tray (`ksni`) | the StatusNotifierItem | block the UI thread |
 
-They talk over three channels (`Command` in, `UiState`/`UiRequest` out) and never share a
-Slint object or a device handle. The UI thread polls the other two on a 500 ms timer, so a
-tray click reaches the window within half a second without any cross-thread UI call.
-
-## Pages
-
-The header switches between two pages. **Devices** is the list and the details card. A row is the
-device's glyph, its name across the whole width of the row, the battery bar with its percentage, and
-a line with the status, the kind and how old the reading is — the connection badge and the Snooze
-button are *not* in the row: the badge is what used to squeeze the name, and both are in the details
-card, which holds the one setting that belongs to a device (its own low-battery level) and the
-Snooze that acts on it.
-
-**Settings** is everything that belongs to the application, in cards rather than a stack of loose
-rows: *Tray icon* (the style picker, whose tiles are the tray's own pixmaps, and one icon per
-device), *One icon per device*, *Notifications*, *Refreshing*, *Window* (close to tray, Quit) and
-*Settings file*. Rows inside a card are flat, separated by a hairline, and carry their own caption.
-
-A page is an `if cond : Layout { ... }` branch, not a `visible:` property: an invisible layout
-child is still laid out, which put the settings page *below* the devices page, out of view.
-
-### The settings page and Scrolling
-
-**The last card of the settings page cannot be scrolled to.** The page is a `ScrollView`, and in
-this Slint version (1.18) its content height comes out roughly one child short: measured with
-marker children at the end of the page, the scroll range stops one card above the content's real
-bottom, so *Settings file* stays out of reach however far you scroll. The cause is in the widget,
-not in the page's `.slint` code — the layout is laid out correctly, and the content's *rendered*
-bottom is below the last position the scrollbar allows. It is left as it is rather than papered
-over: the honest fix is either a hand-rolled scroll area or an upstream report, and neither belongs
-in this change.
+They talk over four channels (`Command` and `UiEvent` in, `State` out, `TrayAction`/`Notice` across)
+and never share a widget or a device handle. The UI thread drains them on a 250 ms
+tick, so a tray click reaches the window without any cross-thread UI call.
 
 ## Tray icons on KineticWE / Noctalia: the pinning caveat
 
 This is a plain StatusNotifierItem: it takes its own bus name
 (`org.kde.StatusNotifierItem-<pid>-1`), publishes `Id = embr`, and registers with
-`org.kde.StatusNotifierWatcher`. On this desktop that is **registered but not drawn**: the
-Noctalia bar draws only the tray items whose application id is listed in `[widget.tray]`
-`pinned`, and puts everything else in the hover-only drawer.
+`org.kde.StatusNotifierWatcher`. On this desktop that is **registered but not drawn**: the Noctalia
+bar draws only the tray items whose application id is listed in `[widget.tray]` `pinned`, and puts
+everything else in the hover-only drawer.
 
 Nothing in this crate works around that — the workaround would be to impersonate another
 application's id. To have the bar draw it, add the id to your Noctalia configuration:
@@ -187,44 +116,59 @@ application's id. To have the bar draw it, add the id to your Noctalia configura
 pinned = [ "Fcitx", "Discord", "equibop", "embr" ]
 ```
 
-`embr` is the string `Tray::id()` returns. Reopen the shell (or reload its config) for
-the change to take effect.
+`embr` is the string `Tray::id()` returns. Reopen the shell (or reload its config) for the change to
+take effect.
 
 ## Not implemented yet
 
-* **Snooze feedback.** The snooze is real (the policy honours it) but the window does not yet
-  say until when, and does not un-snooze.
-* **Only the first notice is shown.** `Monitor::notices` is a list; the settings page shows
-  the first entry.
-* **No tests of its own but the tray's.** The judgement lives in `core`, which is tested; this
-  crate is glue, a `.slint` file and the wiring. There is no automated test that a window
-  appears — the tray's pixmap drawing is the exception, because it is geometry.
-* **i18n.** Every user-visible string is English and literal in the `.slint` file.
-* **One instance per session.** Nothing stops a second `embr` from starting and registering a
-  second tray item; the first one's window would then be reachable only from its own tray item.
+* **The feature pages beyond Battery and Device are stubs**, and they say so: DPI, lighting,
+  profiles, buttons and host switching are roadmap work, and the rail shows the pages the hardware
+  advertises so the shape is real before the contents are.
+* **A partial feature read is not retried by itself.** The window says so and Rescan asks again;
+  nothing re-reads a device that answered half its feature list on its own initiative.
+* **Snooze feedback.** The snooze is real (the policy honours it), but the window does not say until
+  when, and does not un-snooze.
+* **Only the first notice is shown** — `Monitor::notices` is a list.
+* **i18n.** Every user-visible string is English and literal in the Rust.
+* **One instance per session.** Nothing stops a second `embr` from starting and registering a second
+  tray item.
+* **No tests of its own.** The judgement lives in `core`, which is tested; this crate is glue and a
+  window, and there is no automated test that a window appears. The tray's pixmap drawing *is*
+  tested, in `embr-desktop`, because it is geometry.
 
 ## Hidden debug flags
 
 ```sh
 EMBR_DEBUG_ALERT=1 ./target/release/embr        # one synthetic low-battery alert per sweep
-EMBR_DEBUG_ABOUT=1 ./target/release/embr        # open the About window at startup
-EMBR_DEBUG_SETTINGS=1 ./target/release/embr     # open the window on the Settings page
-EMBR_DEBUG_SETTINGS=1 EMBR_DEBUG_SCROLL=-400 ./target/release/embr   # …and scroll it down
+EMBR_DEBUG_SETTINGS=1 ./target/release/embr     # open the settings dialog at startup
+EMBR_DEBUG_PAGE=lighting ./target/release/embr  # open a page that would otherwise need a click
+EMBR_DEBUG_DEVICE=G913 ./target/release/embr    # open a device that is not the worst one
 ```
 
-`EMBR_DEBUG_ALERT` sends one synthetic low-battery alert through the same code a real one takes
-(`dispatch_alert` → notification thread → `notify-rust`), which is how the notification path is
-exercised while notifications are off. It changes nothing else.
+`EMBR_DEBUG_PAGE` waits for the feature set to arrive and opens the page only if the device has it —
+a page the hardware cannot serve is not a page. The other three exist because those parts are
+otherwise click-only, and nothing on this desktop can inject a click. None of them changes anything
+else.
 
-The other three exist because both are otherwise click-only: the Settings page needs a click on the
-header, and the part of it below the fold needs a wheel. `EMBR_DEBUG_SCROLL` (a negative amount
-scrolls down, delivered four times a second for a few seconds) goes through
-`WindowEvent::PointerScrolled` and `dispatch_event` — the entry point the backend itself uses — so
-only the transport leg, the compositor handing over a wheel event, is skipped. They change nothing
-else either.
+## Verifying the tray without a bar that draws it
 
-`scripts/dev/shot.sh` puts those flags to work: it runs the binary against a sandbox
-`XDG_CONFIG_HOME` (never the real `~/.config/embr`), raises the window through KWin
-(`scripts/dev/kwin-raise-windows.js`) and captures just it — `./scripts/dev/shot.sh <sandbox-dir>
-<out.png> [settings|devices] [scroll]`. One caveat: `EMBR_DEBUG_SETTINGS` is read with `is_some()`,
-so it must be *absent* for the Devices page rather than set to `0`.
+The item is a plain StatusNotifierItem, and its pixmap is exactly what a panel would draw:
+
+```sh
+pid=$(pgrep -x embr | head -1)
+qdbus6 org.kde.StatusNotifierWatcher /StatusNotifierWatcher \
+  org.freedesktop.DBus.Properties.Get \
+  org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems   # lists org.kde.StatusNotifierItem-<pid>-1
+busctl --user --json=short get-property "org.kde.StatusNotifierItem-$pid-1" \
+  /StatusNotifierItem org.kde.StatusNotifierItem IconPixmap     # 22x22 ARGB
+```
+
+`--json=short` is what makes it parseable: the plain output is an `a(iiay)` dump whose byte array is
+not hex. The bytes are ARGB in network order.
+
+## Building it
+
+GTK 4 and libadwaita 1 must be installed — on Debian/Ubuntu `libgtk-4-dev libadwaita-1-dev
+libdbus-1-dev pkg-config`, on Arch `gtk4 libadwaita dbus`. The version features in the root
+`Cargo.toml` are mandatory and not cumulative: without `v1_4` the `adw` prelude has no
+`ExpanderRowExt`, and a method that exists in C is invisible in Rust.

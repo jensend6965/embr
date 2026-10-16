@@ -6,8 +6,147 @@
 use std::time::SystemTime;
 
 use embr_hidpp::discover::{Device, DiscoveryReport};
+use embr_hidpp::report::Feature;
 
-use crate::config::Config;
+use crate::Level;
+
+use crate::config::{Config, level_band};
+
+/// One subject a device can be asked about — a page in the window.
+///
+/// Which of these a device has is a fact about the hardware, read from `FEATURE SET {0001}`
+/// rather than written into the window: a design that lists DPI for a keyboard that does not
+/// advertise `2201` is wrong on the first review, and the only way not to be is to ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeaturePage {
+    /// The battery: every device is asked this one, and a device that answers nothing about its
+    /// battery still gets the page (it is what says *Not answering*).
+    Battery,
+    /// `2201` — adjustable DPI.
+    Dpi,
+    /// `8071` — lighting.
+    Lighting,
+    /// `1B04` — special keys, which read as keys on a keyboard and buttons on a mouse.
+    Buttons,
+    /// `8100` — onboard profiles.
+    Profiles,
+    /// `1814` — changing which host the device is connected to.
+    Host,
+    /// What the device says it is: name, how it is attached, serial.
+    Device,
+}
+
+impl FeaturePage {
+    /// The name on the page's card.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Battery => "Battery",
+            Self::Dpi => "DPI & sensitivity",
+            Self::Lighting => "Lighting",
+            Self::Buttons => "Buttons",
+            Self::Profiles => "Profiles",
+            Self::Host => "Host",
+            Self::Device => "Device",
+        }
+    }
+
+    /// The identifier the window uses to pick a page: stable, and never the label (a label is
+    /// wording, and wording changes).
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Battery => "battery",
+            Self::Dpi => "dpi",
+            Self::Lighting => "lighting",
+            Self::Buttons => "buttons",
+            Self::Profiles => "profiles",
+            Self::Host => "host",
+            Self::Device => "device",
+        }
+    }
+
+    /// The page with this id, for a window that stores which page it is showing in a
+    /// configuration file or a command line.
+    pub fn from_id(id: &str) -> Option<Self> {
+        [
+            Self::Battery,
+            Self::Dpi,
+            Self::Lighting,
+            Self::Buttons,
+            Self::Profiles,
+            Self::Host,
+            Self::Device,
+        ]
+        .into_iter()
+        .find(|page| page.id() == id)
+    }
+
+    /// What the page is evidence of: the HID++ feature the device itself advertised, named the
+    /// way the catalogue names it. `None` for the two pages that are not a feature at all.
+    ///
+    /// This is what a page that is not built yet can say instead of pretending: it exists
+    /// because the hardware answered `2201`, and that is a fact about the device, not a promise
+    /// about the window.
+    pub fn advertised_as(self) -> Option<&'static str> {
+        match self {
+            Self::Battery => {
+                Some("1000 BATTERY STATUS / 1001 BATTERY VOLTAGE / 1004 UNIFIED BATTERY")
+            }
+            Self::Dpi => Some("2201 ADJUSTABLE DPI"),
+            Self::Lighting => Some("8071 RGB EFFECTS"),
+            Self::Buttons => Some("1B04 SPECIAL KEYS"),
+            Self::Profiles => Some("8100 ONBOARD PROFILES"),
+            Self::Host => Some("1814 CHANGE HOST"),
+            Self::Device => None,
+        }
+    }
+}
+
+/// The pages one device has, from the features it advertises.
+///
+/// Battery and Device are always there; the rest only when the device really implements them.
+pub fn pages_for(features: &[Feature]) -> Vec<FeaturePage> {
+    let has = |feature: Feature| features.contains(&feature);
+    let mut pages = vec![FeaturePage::Battery];
+    if has(Feature::AdjustableDpi) {
+        pages.push(FeaturePage::Dpi);
+    }
+    if has(Feature::RgbEffects) {
+        pages.push(FeaturePage::Lighting);
+    }
+    if has(Feature::SpecialKeys) {
+        pages.push(FeaturePage::Buttons);
+    }
+    if has(Feature::OnboardProfiles) {
+        pages.push(FeaturePage::Profiles);
+    }
+    if has(Feature::ChangeHost) {
+        pages.push(FeaturePage::Host);
+    }
+    pages.push(FeaturePage::Device);
+    pages
+}
+
+/// What one device answered about its own feature set: the pages that follow from it, and how
+/// whole the answer was.
+///
+/// Kept apart from [`FeaturePage`] because a page list that is a *subset* is not wrong, it is
+/// incomplete — and a window that cannot tell the two apart will quietly offer a keyboard with no
+/// lighting page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevicePages {
+    pub pages: Vec<FeaturePage>,
+    /// How many feature slots the device declared.
+    pub declared: usize,
+    /// How many of them did not answer.
+    pub silent: usize,
+}
+
+impl DevicePages {
+    /// Whether every feature slot the device declared answered.
+    pub fn complete(&self) -> bool {
+        self.silent == 0
+    }
+}
 
 /// One device, ready to draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +162,10 @@ pub struct DeviceView {
     pub percent_text: String,
     /// True when the percentage was inferred from voltage rather than reported.
     pub estimated: bool,
+    /// Which band this reading is in — green, amber, red — when the user asked for the level bars
+    /// to be coloured by their level. `None` when that is switched off, or when there is no reading at
+    /// all: an unknown level is not a level.
+    pub level: Option<Level>,
     pub millivolts: Option<u16>,
     pub status: String,
     pub charging: bool,
@@ -33,6 +176,13 @@ pub struct DeviceView {
     pub alert_below: Option<u8>,
     /// The level this device's alert actually uses: its own, or the highest shared one.
     pub alert_below_effective: u8,
+    /// Which pages this device has, once its feature set has been read. `None` until it has
+    /// been — a window that guessed would be offering features the hardware may not have.
+    pub pages: Option<Vec<FeaturePage>>,
+    /// True when the feature set came back with slots that did not answer, so the pages above are
+    /// a subset rather than the whole inventory. A device that went to sleep halfway through its
+    /// own feature list must not be shown as one that has no lighting.
+    pub pages_partial: bool,
     /// Why there is no reading.
     pub error: Option<String>,
     /// When the reading was taken.
@@ -58,6 +208,11 @@ impl DeviceView {
                 None => "—".to_string(),
             },
             estimated: estimated && mark_estimates,
+            level: if config.ui.level_colors {
+                percent.map(|percent| level_band(percent.value))
+            } else {
+                None
+            },
             millivolts: reading.and_then(|b| b.millivolts),
             status: device.status_label().to_string(),
             charging: reading.is_some_and(|b| b.charging()),
@@ -68,6 +223,10 @@ impl DeviceView {
             alert_below_effective: alert_below
                 .or_else(|| config.notifications.thresholds.first().copied())
                 .unwrap_or(20),
+            // Filled in by the `Monitor` from what the device itself advertised; nothing is
+            // guessed here, because a guess would become a page the hardware cannot serve.
+            pages: None,
+            pages_partial: false,
             error: device.error.clone(),
             captured: reading.map(|b| b.captured),
         }
@@ -249,6 +408,54 @@ pub fn sort_worst_first(devices: &mut [DeviceView]) {
     });
 }
 
+/// `20 % / 10 %` — the shared alert thresholds as the window shows them.
+///
+/// Wording is a decision, and decisions live here: two windows that formatted this themselves
+/// would eventually format it differently.
+pub fn thresholds_text(thresholds: &[u8]) -> String {
+    if thresholds.is_empty() {
+        return "—".to_string();
+    }
+    thresholds
+        .iter()
+        .map(|level| format!("{level} %"))
+        .collect::<Vec<String>>()
+        .join(" / ")
+}
+
+/// `3 devices · lowest ~56%` — what the devices add up to, as the window's header says it.
+pub fn summary_text(snapshot: &Snapshot) -> String {
+    let count = snapshot.devices.len();
+    if count == 0 {
+        return "no devices found".to_string();
+    }
+    let devices = if count == 1 {
+        "1 device".to_string()
+    } else {
+        format!("{count} devices")
+    };
+    match snapshot.lowest() {
+        Some(lowest) => format!("{devices} · lowest {}", lowest.percent_text),
+        None => format!("{devices} · no reading yet"),
+    }
+}
+
+/// `quiet about this device for 30 minutes` — the line under the Snooze setting, from the
+/// configured period rather than a number written into a window.
+pub fn snooze_caption(minutes: u64) -> String {
+    match minutes {
+        0 => "quiet about this device until you say otherwise".to_string(),
+        1 => "quiet about this device for a minute".to_string(),
+        minutes => format!("quiet about this device for {minutes} minutes"),
+    }
+}
+
+/// `Ring — a circle that fills as the charge rises`: the chosen tray style in words, for the line
+/// under the picker.
+pub fn tray_style_caption(chosen: crate::TrayStyle) -> String {
+    format!("{} — {}.", chosen.label(), chosen.caption())
+}
+
 /// `12s ago`, `4 min ago`, `2 h ago` — for the "updated" field of the details panel.
 pub fn human_age(captured: SystemTime, now: SystemTime) -> String {
     let seconds = now
@@ -268,7 +475,7 @@ pub fn human_age(captured: SystemTime, now: SystemTime) -> String {
 mod tests {
     use super::*;
     use embr_hidpp::battery::{BatteryReading, ChargeStatus, Percent, PercentSource};
-    use embr_hidpp::discover::{Connection, DeviceKind};
+    use embr_hidpp::discover::{Capabilities, Connection, DeviceKind};
     use std::time::Duration;
 
     fn device(name: &str, percent: Option<(u8, PercentSource)>) -> Device {
@@ -627,5 +834,188 @@ mod tests {
             &config(),
         );
         assert!(!fine.needs_attention());
+    }
+
+    #[test]
+    fn the_pages_a_device_gets_come_from_the_features_it_advertises() {
+        // The G703 on this desk: DPI, lighting, keys and onboard profiles.
+        let mouse = pages_for(&[
+            Feature::Root,
+            Feature::FeatureSet,
+            Feature::AdjustableDpi,
+            Feature::RgbEffects,
+            Feature::OnboardProfiles,
+            Feature::SpecialKeys,
+        ]);
+        assert_eq!(
+            mouse,
+            vec![
+                FeaturePage::Battery,
+                FeaturePage::Dpi,
+                FeaturePage::Lighting,
+                FeaturePage::Buttons,
+                FeaturePage::Profiles,
+                FeaturePage::Device,
+            ],
+            "worst-first order is battery, then the subjects the device has, then what it is"
+        );
+
+        // The G913 keyboard advertises no DPI at all — and a page it does not have must not
+        // appear, however sensible it would look in a design.
+        let keyboard = pages_for(&[
+            Feature::RgbEffects,
+            Feature::OnboardProfiles,
+            Feature::SpecialKeys,
+            Feature::ChangeHost,
+        ]);
+        assert!(!keyboard.contains(&FeaturePage::Dpi), "{keyboard:?}");
+        assert!(keyboard.contains(&FeaturePage::Host), "{keyboard:?}");
+
+        // A headset that only answers about its battery still gets the two pages that are not
+        // a feature at all.
+        let headset = pages_for(&[]);
+        assert_eq!(headset, vec![FeaturePage::Battery, FeaturePage::Device]);
+    }
+
+    #[test]
+    fn every_page_has_a_label_and_a_stable_id() {
+        for page in [
+            FeaturePage::Battery,
+            FeaturePage::Dpi,
+            FeaturePage::Lighting,
+            FeaturePage::Buttons,
+            FeaturePage::Profiles,
+            FeaturePage::Host,
+            FeaturePage::Device,
+        ] {
+            assert!(!page.label().is_empty());
+            assert!(!page.id().is_empty());
+            assert_ne!(
+                page.id(),
+                page.label(),
+                "the id is what the window matches on, not the words on the card"
+            );
+        }
+    }
+
+    #[test]
+    fn a_page_can_be_named_by_id_again() {
+        for page in [FeaturePage::Battery, FeaturePage::Dpi, FeaturePage::Device] {
+            assert_eq!(FeaturePage::from_id(page.id()), Some(page));
+        }
+        assert_eq!(
+            FeaturePage::from_id("lighting"),
+            Some(FeaturePage::Lighting)
+        );
+        assert_eq!(
+            FeaturePage::from_id("nonsense"),
+            None,
+            "a page this build does not have is not silently the first one"
+        );
+    }
+
+    #[test]
+    fn the_pages_that_are_not_a_feature_say_so() {
+        assert_eq!(FeaturePage::Device.advertised_as(), None);
+        assert_eq!(
+            FeaturePage::Dpi.advertised_as(),
+            Some("2201 ADJUSTABLE DPI"),
+            "a page that is not built yet can say what the device advertised instead of pretending"
+        );
+        for page in pages_for(&[Feature::AdjustableDpi]) {
+            if page == FeaturePage::Battery {
+                assert!(page.advertised_as().is_some(), "battery is a feature too");
+            }
+        }
+    }
+
+    #[test]
+    fn the_shared_thresholds_read_as_one_sentence() {
+        assert_eq!(thresholds_text(&[20, 10]), "20 % / 10 %");
+        assert_eq!(thresholds_text(&[15]), "15 %");
+        assert_eq!(
+            thresholds_text(&[]),
+            "—",
+            "a config with no thresholds says so instead of showing nothing"
+        );
+    }
+
+    #[test]
+    fn a_feature_set_that_was_never_answered_is_not_a_feature_set() {
+        // The keyboard on this desk goes to sleep and, when asked, declares nothing at all: the
+        // count call answers with zero. That is an unreachable inventory, not an empty one — the
+        // difference between a keyboard with no lighting and a keyboard that did not say.
+        let silent = Capabilities::default();
+        assert!(
+            silent.complete(),
+            "nothing declared and nothing silent looks complete — which is exactly why \
+             `answered` is the flag that matters"
+        );
+        assert!(!silent.answered(), "nothing declared is not an answer");
+
+        // All declared slots silent is the same thing said more slowly.
+        let mute = Capabilities {
+            features: vec![],
+            declared: 28,
+            silent: 28,
+        };
+        assert!(!mute.answered());
+
+        // And one answer out of twenty-eight is an answer, with a list that is a subset.
+        let partial = Capabilities {
+            features: vec![(Feature::AdjustableDpi, 0)],
+            declared: 28,
+            silent: 27,
+        };
+        assert!(partial.answered());
+        assert!(!partial.complete());
+    }
+
+    #[test]
+    fn a_page_list_that_did_not_all_answer_is_incomplete() {
+        let whole = DevicePages {
+            pages: pages_for(&[Feature::AdjustableDpi]),
+            declared: 10,
+            silent: 0,
+        };
+        assert!(whole.complete());
+
+        // Seven of ten slots silent: the pages are what the device confirmed, which is not the
+        // same as what it has — this is the flag that keeps the window from claiming a keyboard
+        // has no lighting because it was asleep.
+        let partial = DevicePages {
+            pages: pages_for(&[]),
+            declared: 10,
+            silent: 7,
+        };
+        assert!(!partial.complete());
+        assert_eq!(
+            partial.pages,
+            vec![FeaturePage::Battery, FeaturePage::Device]
+        );
+    }
+
+    #[test]
+    fn the_header_summarises_the_devices_it_has() {
+        assert_eq!(summary_text(&Snapshot::default()), "no devices found");
+        assert_eq!(
+            summary_text(&Snapshot::from_report(
+                &report(vec![device("Solo", Some((88, PercentSource::Device)))]),
+                &config()
+            )),
+            "1 device · lowest 88%"
+        );
+        assert_eq!(
+            summary_text(&Snapshot::from_report(
+                &report(vec![
+                    device("Mouse", Some((56, PercentSource::Estimated))),
+                    device("Keyboard", Some((86, PercentSource::Device))),
+                    device("Headset", None),
+                ]),
+                &config()
+            )),
+            "3 devices · lowest ~56%",
+            "the worst battery is the one worth naming, with its ~ kept"
+        );
     }
 }

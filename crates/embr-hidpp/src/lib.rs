@@ -28,7 +28,7 @@ pub mod transport;
 
 pub use battery::{BatteryReading, ChargeStatus, Percent, PercentSource};
 pub use decode::BatterySource;
-pub use discover::{Connection, Device, DeviceKind, DiscoveryReport, discover};
+pub use discover::{Connection, Device, DeviceKind, DiscoveryReport, capabilities_of, discover};
 pub use hotplug::Uevents;
 pub use report::Feature;
 pub use transport::Channel;

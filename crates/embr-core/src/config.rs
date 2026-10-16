@@ -181,13 +181,49 @@ impl TrayTextColor {
     }
 }
 
+/// Where a reading sits on the green → amber → red scale.
+///
+/// One scale for both surfaces that colour a reading — the tray icon's `level` text colour and the
+/// window's percentage — so that a battery cannot be green in one place and amber in the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Level {
+    /// At or below [`LOW_AT_OR_BELOW`]: red, the level worth acting on.
+    Low,
+    /// Up to [`MEDIUM_AT_OR_BELOW`]: amber, getting there.
+    Middle,
+    /// Above it: green.
+    Full,
+}
+
+/// At or below this percentage a reading is low.
+pub const LOW_AT_OR_BELOW: u8 = 20;
+/// Up to and including this it is in the middle; above it is full.
+///
+/// The band was three points wide (`red ≤ 20`, `amber ≤ 30`) while only a tray icon's digits used
+/// it. The window colours the percentages too now, and a middle that is 21–30 is not a middle: this
+/// is the change the ask was about, made once, in the one place both surfaces read.
+pub const MEDIUM_AT_OR_BELOW: u8 = 60;
+
+/// The band a percentage is in.
+pub fn level_band(percent: u8) -> Level {
+    if percent <= LOW_AT_OR_BELOW {
+        Level::Low
+    } else if percent <= MEDIUM_AT_OR_BELOW {
+        Level::Middle
+    } else {
+        Level::Full
+    }
+}
+
 /// The colour a level is drawn in: red, amber, green — grey when there is nothing to read.
 pub fn level_color(level: Option<u8>) -> (u8, u8, u8) {
     match level {
         None => (155, 161, 169),
-        Some(percent) if percent <= 20 => LEVEL_COLORS[0],
-        Some(percent) if percent <= 30 => LEVEL_COLORS[2],
-        Some(_) => LEVEL_COLORS[1],
+        Some(percent) => match level_band(percent) {
+            Level::Low => LEVEL_COLORS[0],
+            Level::Full => LEVEL_COLORS[1],
+            Level::Middle => LEVEL_COLORS[2],
+        },
     }
 }
 
@@ -267,6 +303,9 @@ pub struct Ui {
     pub theme: String,
     /// Show voltage next to the percentage.
     pub show_voltage: bool,
+    /// Draw a device's level bar in the colour of its level — green, amber, red. On by default;
+    /// a user who would rather every bar had the theme's accent colour has this switch.
+    pub level_colors: bool,
     /// Mark percentages we inferred from voltage as approximate.
     pub mark_estimates: bool,
     /// Which shape the tray icon is drawn as, by [`TrayStyle::as_str`]. Kept as a string, like
@@ -286,7 +325,61 @@ pub struct Ui {
     pub tray_devices: Vec<String>,
 }
 
+/// Which colour scheme the window follows.
+///
+/// `System` is what a desktop-following application means, and it is the default a new
+/// configuration gets: a window that forces dark on a desktop set to light is a window that
+/// ignores the desktop. The name is kept in the file (like [`TrayStyle::as_str`]) so that a value
+/// this build does not know falls back rather than failing to load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Theme {
+    /// Follow the desktop: scheme and accent come from the portal.
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+impl Theme {
+    pub const ALL: [Theme; 3] = [Theme::System, Theme::Dark, Theme::Light];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|theme| theme.as_str() == name)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+        }
+    }
+
+    /// What the choice means, for the line under the control that makes it.
+    pub fn caption(self) -> &'static str {
+        match self {
+            Self::System => "follow the desktop's colour scheme and accent",
+            Self::Dark => "always dark, whatever the desktop says",
+            Self::Light => "always light, whatever the desktop says",
+        }
+    }
+}
+
 impl Ui {
+    /// The colour scheme the window was asked to use, with a name this build does not know
+    /// falling back to following the desktop.
+    pub fn theme(&self) -> Theme {
+        Theme::from_name(&self.theme).unwrap_or_default()
+    }
+
     /// The tray icon's style, with a name this build does not know falling back to the default.
     pub fn tray_style(&self) -> TrayStyle {
         TrayStyle::from_name(&self.tray_style).unwrap_or_default()
@@ -309,8 +402,9 @@ impl Ui {
 impl Default for Ui {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(),
+            theme: Theme::System.as_str().to_string(),
             show_voltage: true,
+            level_colors: true,
             mark_estimates: true,
             tray_style: TrayStyle::Battery.as_str().to_string(),
             tray_text_color: TrayTextColor::Level.as_str().to_string(),
@@ -776,5 +870,94 @@ mod tests {
             BTreeMap::from([("mouse".to_string(), 30)]),
             "only the usable level is kept: the rest fall back to the defaults"
         );
+    }
+
+    #[test]
+    fn a_reading_is_green_amber_or_red_by_how_full_it_is() {
+        // The bands, at their edges: nothing may fall between them, and the edges belong to the
+        // band they name.
+        assert_eq!(level_band(0), Level::Low);
+        assert_eq!(level_band(LOW_AT_OR_BELOW), Level::Low);
+        assert_eq!(level_band(LOW_AT_OR_BELOW + 1), Level::Middle);
+        assert_eq!(level_band(MEDIUM_AT_OR_BELOW), Level::Middle);
+        assert_eq!(level_band(MEDIUM_AT_OR_BELOW + 1), Level::Full);
+        assert_eq!(level_band(100), Level::Full);
+
+        // …and the colours those bands are drawn in, which the tray icon's digits share.
+        assert_eq!(level_color(Some(5)), LEVEL_COLORS[0], "red when low");
+        assert_eq!(
+            level_color(Some(55)),
+            LEVEL_COLORS[2],
+            "amber in the middle"
+        );
+        assert_eq!(level_color(Some(85)), LEVEL_COLORS[1], "green when full");
+        assert_eq!(
+            level_color(None),
+            (155, 161, 169),
+            "a device with no reading is grey, not red"
+        );
+
+        // One scale, so a battery cannot be green in the tray and amber in the window.
+        assert_eq!(TrayTextColor::Level.color(Some(85)), level_color(Some(85)));
+    }
+
+    #[test]
+    fn colouring_by_level_is_the_users_choice() {
+        let mut config = Config::default();
+        assert!(
+            config.ui.level_colors,
+            "coloured by level is the default, and the switch is how it is turned off"
+        );
+        config.ui.level_colors = false;
+        let path = scratch("level-colors");
+        save(&config, &path).unwrap();
+        let (loaded, problems) = load(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!loaded.ui.level_colors, "and the choice survives a reload");
+    }
+
+    #[test]
+    fn the_colour_scheme_is_a_choice_with_a_name_and_a_fallback() {
+        // Every name this build knows round-trips through the file.
+        for theme in Theme::ALL {
+            assert_eq!(Theme::from_name(theme.as_str()), Some(theme));
+            assert!(!theme.caption().is_empty());
+            assert_ne!(theme.label(), theme.as_str(), "the label is for the window");
+        }
+
+        // A name it does not know is the same field falling back, not a file that fails to load.
+        let mut config = Config::default();
+        config.ui.theme = "vaporwave".to_string();
+        assert_eq!(
+            config.ui.theme(),
+            Theme::System,
+            "and the fallback follows the desktop"
+        );
+
+        // A fresh configuration follows the desktop: forcing dark on a light desktop is a window
+        // that ignores the desktop, and this one can do better.
+        assert_eq!(Config::default().ui.theme(), Theme::System);
+
+        // …and a window that was told to force one keeps doing so across a save and a reload.
+        for theme in [Theme::Dark, Theme::Light] {
+            let mut config = Config::default();
+            config.ui.theme = theme.as_str().to_string();
+            let path = scratch(&format!("theme-{}", theme.as_str()));
+            save(&config, &path).unwrap();
+            let (loaded, problems) = load(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded.ui.theme(), theme);
+        }
+    }
+
+    #[test]
+    fn the_voltage_can_be_turned_off_and_comes_back_off() {
+        let mut config = Config::default();
+        assert!(config.ui.show_voltage, "showing it is the default");
+        config.ui.show_voltage = false;
+        let path = scratch("voltage");
+        save(&config, &path).unwrap();
+        let (loaded, _) = load(&path);
+        assert!(!loaded.ui.show_voltage);
     }
 }

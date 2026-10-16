@@ -1,0 +1,12 @@
+[package]
+name = "embr-desktop"
+description = "The tray icons and the notifications — what the app is on the desktop, toolkit-free"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+embr-core = { path = "../embr-core" }
+ksni.workspace = true
+notify-rust.workspace = true

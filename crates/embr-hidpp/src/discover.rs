@@ -633,9 +633,38 @@ pub fn device_name(
     Some((text, kind))
 }
 
+/// What a device said about its own feature set.
+///
+/// The count is the device's own answer to "how many features do you have", so it is the only
+/// honest measure of whether the list is complete: a device that goes to sleep halfway through
+/// answers some slots and not others, and a caller that treated that as "the device does not have
+/// those features" would offer a keyboard with no lighting and mean it. `silent` is how many of
+/// the slots it declared did not answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Every feature the device reported that we have a name for, with its version.
+    pub features: Vec<(Feature, u8)>,
+    /// How many slots the device declared.
+    pub declared: usize,
+    /// How many declared slots did not answer.
+    pub silent: usize,
+}
+
+impl Capabilities {
+    /// Whether every slot the device declared answered.
+    pub fn complete(&self) -> bool {
+        self.silent == 0
+    }
+
+    /// Whether the device answered at all — it declared a feature set and at least one slot of it.
+    pub fn answered(&self) -> bool {
+        self.declared > 0 && self.silent < self.declared
+    }
+}
+
 /// Every feature a device advertises, via `FEATURE SET {0001}`.
-pub fn capabilities(channel: &mut Channel, device: u8, timeout: Duration) -> Vec<(Feature, u8)> {
-    let mut found = Vec::new();
+pub fn capabilities(channel: &mut Channel, device: u8, timeout: Duration) -> Capabilities {
+    let mut found = Capabilities::default();
     let Ok(Some(index)) = feature_index(channel, device, Feature::FeatureSet, timeout) else {
         return found;
     };
@@ -648,22 +677,81 @@ pub fn capabilities(channel: &mut Channel, device: u8, timeout: Duration) -> Vec
     let Some(count) = payload.first().copied() else {
         return found;
     };
+    found.declared = usize::from(count);
     for slot in 0..count {
-        let Ok(reply) = channel.call_feature(device, index, 0x1, &[slot], timeout) else {
-            continue;
-        };
-        let Ok(payload) = reply.payload_or_error() else {
-            continue;
-        };
-        if payload.len() < 3 {
-            continue;
-        }
-        let id = u16::from_be_bytes([payload[0], payload[1]]);
-        if let Some(feature) = Some(id).and_then(known_feature) {
-            found.push((feature, payload[2]));
+        let reported = channel
+            .call_feature(device, index, 0x1, &[slot], timeout)
+            .ok()
+            .and_then(|reply| match reply.payload_or_error() {
+                // Copied out inside the closure: the payload borrows the reply.
+                Ok(payload) if payload.len() >= 3 => {
+                    Some((u16::from_be_bytes([payload[0], payload[1]]), payload[2]))
+                }
+                _ => None,
+            });
+        match reported {
+            Some((id, version)) => {
+                if let Some(feature) = known_feature(id) {
+                    found.features.push((feature, version));
+                }
+            }
+            // A slot that did not answer is counted, not skipped: see `Capabilities`.
+            None => found.silent += 1,
         }
     }
     found
+}
+
+/// Every feature a device advertises, opening whichever channel reaches it.
+///
+/// A feature set is a device's inventory rather than a reading: it changes when the hardware
+/// changes and not otherwise, so the UI asks for it once per device instead of once per sweep.
+/// That is what keeps its cost off the cadence — one ROOT lookup, one count and one call per
+/// slot is twenty-odd round trips on the G913, which is affordable once and not every minute.
+///
+/// `None` means the device could not be reached at all. A [`Capabilities`] with no features and
+/// nothing declared means it was reached and would not answer about its own feature set; ask
+/// [`Capabilities::complete`] before treating the list as the whole truth.
+pub fn capabilities_of(device: &Device, patience: Patience) -> Option<Capabilities> {
+    // A device paired to a receiver answers under its slot number even when the request goes to
+    // the device's own hidraw node (`report`): the node is a view onto the receiver, not a
+    // second device.
+    let index = match &device.connection {
+        Connection::Receiver { slot, .. } => *slot,
+        _ => DEVICE_SELF,
+    };
+    let node = device
+        .hidraw
+        .clone()
+        .or_else(|| receiver_node_for(device))?;
+    let mut channel = Channel::open(&node).ok()?;
+    Some(capabilities(&mut channel, index, patience.device()))
+}
+
+/// The receiver node a paired device is reached through, for a device the kernel exposes no
+/// node of its own: there is no way to talk to it except through the receiver that owns it.
+fn receiver_node_for(device: &Device) -> Option<PathBuf> {
+    let Connection::Receiver { product, .. } = &device.connection else {
+        return None;
+    };
+    let nodes = sysfs::logitech_nodes();
+    let mut seen: Vec<String> = Vec::new();
+    for node in nodes.iter().filter(|node| node.role == Role::Receiver) {
+        let group = sysfs::phys_group(node);
+        if seen.contains(&group) {
+            continue;
+        }
+        seen.push(group.clone());
+        let Some(channel_node) = sysfs::receiver_channel_in_group(&nodes, &group) else {
+            continue;
+        };
+        // The product id is how a device knows which receiver it came in with: two dongles of
+        // the same family on one machine are otherwise indistinguishable here.
+        if channel_node.product == *product {
+            return Some(channel_node.hidraw.clone());
+        }
+    }
+    None
 }
 
 fn known_feature(id: u16) -> Option<Feature> {

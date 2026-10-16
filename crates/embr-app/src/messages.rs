@@ -1,27 +1,28 @@
-//! The vocabulary the three threads use to talk to each other.
+//! The vocabulary the window, the settings page and the device thread use to talk to each other.
 //!
-//! There is exactly one device thread, one UI thread and one notification thread. They never
-//! share a device handle, a `Monitor` or a Slint object: they pass these messages instead.
-//! That is what keeps a five-second HID++ sweep from touching the event loop, and a slow
-//! D-Bus server from touching either.
+//! The device thread owns `core::Monitor` and never shares it, the UI threads own every widget and
+//! never open a device, and the two pass these messages instead. A sweep is seconds of HID++
+//! traffic; it must not run where the pixels are drawn.
 
 use std::sync::mpsc::Sender;
 
-use embr_core::{Alert, Snapshot, TrayLook, TrayStyle, TrayTextColor};
+use embr_core::{FeaturePage, Snapshot, Theme, TrayLook, TrayStyle, TrayTextColor};
 
-/// UI thread or tray → the device thread.
+/// The window (or the settings page) → the device thread.
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Read every device now, on the application's own schedule: quick, and a sleeping device
-    /// is not worth stalling for.
+    /// Read every device now, on the application's own schedule: quick, and a sleeping device is
+    /// not worth stalling for.
     Refresh,
     /// Read every device now because the user asked, with the longer waits that give a device
     /// coming back from sleep a chance to answer.
     Rescan,
     /// Ask every device whether it is still there, with deadlines short enough to do it every few
-    /// seconds. This is what notices a device switching off while the user is looking at the
-    /// window, instead of the next scheduled sweep finding out.
+    /// seconds.
     Watch,
+    /// Ask one device which features it implements, because the window is about to show what it
+    /// can be asked about. A device's inventory, so it is asked once and kept.
+    Pages(String),
     /// Keep quiet about one device for the configured snooze period.
     Snooze(String),
     /// Turn battery notifications on or off and remember the choice.
@@ -34,103 +35,84 @@ pub enum Command {
     SetTrayTextColor(TrayTextColor),
     /// Give one device a tray icon of its own, or take it away again.
     SetTrayDevice { key: String, on: bool },
-    /// Keep running when the window is closed (tray only), or quit instead.
-    SetCloseToTray(bool),
-    /// Ask the devices whether they are still there, while the window is open, or leave it to the
-    /// sweeps.
+    /// Ask the devices whether they are still there between sweeps, or leave it to the sweeps.
     SetWatchDevices(bool),
+    /// Keep running when the window is closed (the tray only), or quit instead.
+    SetCloseToTray(bool),
     /// How often a fresh reading is taken while the window is open.
     SetRefreshSeconds(u64),
+    /// Which colour scheme the window should use.
+    SetTheme(Theme),
+    /// Whether the readouts carry the voltage next to the percentage.
+    SetShowVoltage(bool),
+    /// Whether a reading is drawn in the colour of its level.
+    SetLevelColors(bool),
+    /// Whether a percentage inferred from voltage is marked as approximate.
+    SetMarkEstimates(bool),
 }
 
-/// The device thread, the notification thread or the tray → the UI thread.
-///
-/// The UI thread polls these on its own timer instead of being called into from another
-/// thread. Tray clicks therefore arrive within half a second, and no Slint object ever
-/// crosses a thread boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UiRequest {
-    ShowWindow,
-    /// Show the window on one particular device — what clicking an icon that is about a device
-    /// means.
-    ShowDevice(String),
-    Quit,
-}
-
-/// Everything the window needs to draw one refresh, plus the settings that came with it.
-///
-/// The device list and the ages are `core`'s own view model and text — the UI only unpacks
-/// them. The settings fields are configuration *presentation*: `core` stores thresholds as a
-/// list of numbers and this is the list as a sentence.
+/// The device thread → the window: everything one refresh produced, plus the settings that came
+/// with it.
 #[derive(Debug, Clone)]
-pub struct UiState {
+pub struct State {
     pub snapshot: Snapshot,
     pub notifications_enabled: bool,
+    /// The shared alert thresholds as a sentence, from core: the window draws words, it does not
+    /// choose them.
     pub thresholds_text: String,
+    /// The cadence the user configured, which the window's own clock turns into sweeps.
     pub refresh_seconds: u64,
     /// Which shape the tray icon is drawn as, and the colour of its text when it has any.
     pub tray_look: TrayLook,
-    /// How long a snooze keeps quiet, so the row beside the device can say so.
+    /// How long a snooze keeps quiet, so the settings page can say so.
     pub snooze_minutes: u64,
     /// The devices the user gave a tray icon of their own, by key.
     pub tray_devices: Vec<String>,
     pub close_to_tray: bool,
+    /// Which colour scheme the window was asked to use.
+    pub theme: Theme,
+    /// Whether a reading's voltage is shown beside its percentage.
+    pub show_voltage: bool,
+    /// Whether a reading is drawn in the colour of its level.
+    pub level_colors: bool,
+    /// Whether a percentage inferred from voltage is marked as approximate.
+    pub mark_estimates: bool,
     /// Whether a device switching off is noticed within seconds rather than at the next sweep.
     pub watch_devices: bool,
-    /// Where the settings on the settings page are written, so the page can say so.
+    /// Where the settings are written, so the page can say so.
     pub config_path: String,
+    /// A line worth showing once — a config file that could not be read, a device lost on the way.
     pub notice: Option<String>,
 }
 
-/// Something for the notification thread to put on screen.
+/// What the user did in the window, delivered to the UI thread's own tick.
 ///
-/// Battery alerts and the occasional word from the application itself travel the same channel:
-/// both are "say this to the user", and keeping them one channel keeps one thread owning D-Bus.
+/// Signals report a click the way they arrive — through the widget that was clicked — rather than
+/// reaching into the window from wherever they are connected, so the device the window shows
+/// changes in one place.
 #[derive(Debug, Clone)]
-pub enum Notice {
-    /// A battery alert, decided by the policy in `core`.
-    Alert(Alert),
-    /// A line from the app: no icon of its own, no action, just a sentence.
-    Text { title: String, body: String },
+pub enum UiEvent {
+    /// Open one device: expand its row and show it.
+    Select(String),
+    /// Show one page of one device.
+    ShowPage { key: String, page: FeaturePage },
+    /// The tray picker moved: draw the icons now, the way the switch it owns does, rather than
+    /// queueing the change behind whatever sweep is in flight.
+    RestyleTray(TrayLook),
+    /// Quit, from the settings page's button.
+    Quit,
 }
 
-/// `20 % / 10 %` — the thresholds as the settings card shows them.
-pub fn thresholds_text(thresholds: &[u8]) -> String {
-    if thresholds.is_empty() {
-        return "—".to_string();
-    }
-    thresholds
-        .iter()
-        .map(|level| format!("{level} %"))
-        .collect::<Vec<String>>()
-        .join(" / ")
-}
-
-/// `quiet about this device for 30 minutes` — the caption under the Snooze row, from the
-/// configured period rather than a number written into the window.
-pub fn snooze_caption(minutes: u64) -> String {
-    match minutes {
-        0 => "quiet about this device until you say otherwise".to_string(),
-        1 => "quiet about this device for a minute".to_string(),
-        minutes => format!("quiet about this device for {minutes} minutes"),
+/// Hand the device thread a command, or say why it could not be handed over.
+pub fn dispatch(commands: &Sender<Command>, command: Command) {
+    if commands.send(command).is_err() {
+        eprintln!("[app] the device thread has stopped; nothing was asked of the devices");
     }
 }
 
-/// Hand an alert to the notification thread, or say why it could not be handed over.
-pub fn dispatch_alert(notifications: &Sender<Notice>, alert: Alert) {
-    let (title, body) = alert.title_and_body();
-    if notifications.send(Notice::Alert(alert)).is_err() {
-        eprintln!("[notify] the notification thread has stopped; dropped: {title}: {body}");
-    }
-}
-
-/// Hand the notification thread a line of the app's own — no action, nothing to click.
-pub fn dispatch_note(notifications: &Sender<Notice>, title: &str, body: &str) {
-    let notice = Notice::Text {
-        title: title.to_string(),
-        body: body.to_string(),
-    };
-    if notifications.send(notice).is_err() {
-        eprintln!("[notify] the notification thread has stopped; dropped: {title}: {body}");
+/// The same, for an event the UI thread handles itself.
+pub fn dispatch_event(events: &Sender<UiEvent>, event: UiEvent) {
+    if events.send(event).is_err() {
+        eprintln!("[app] the window is gone; the click was dropped");
     }
 }

@@ -80,13 +80,19 @@ fn main() {
             _ => embr_hidpp::report::DEVICE_SELF,
         };
         let caps = discover::capabilities(&mut channel, index, RECEIVER_TIMEOUT);
-        if !caps.is_empty() {
+        if !caps.features.is_empty() {
             println!(
-                "\n{} advertises {} feature(s) we know:",
+                "\n{} advertises {} feature(s) we know{}, of {} slot(s) declared:",
                 device.name,
-                caps.len()
+                caps.features.len(),
+                if caps.complete() {
+                    String::new()
+                } else {
+                    format!(" ({} slot(s) did not answer)", caps.silent)
+                },
+                caps.declared
             );
-            for (feature, version) in caps {
+            for (feature, version) in caps.features {
                 println!(
                     "  {:<26} id {:04X} version {version}",
                     feature.name(),

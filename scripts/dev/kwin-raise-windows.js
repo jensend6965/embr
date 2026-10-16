@@ -5,7 +5,8 @@
 //   qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript <this file> embr-raise
 //   qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.start
 //
-// The About window wins if it is open — that is the one that is hard to reach otherwise.
+// The About and Settings windows win if they are open: each is a window of its own, and each is
+// harder to reach than the main one. Settings beats the main window; About beats everything.
 
 function isEmbr(w) {
     var cls = String(w.resourceClass || "") + " " + String(w.resourceName || "");
@@ -14,6 +15,7 @@ function isEmbr(w) {
 
 var seen = 0;
 var about = null;
+var settings = null;
 var main = null;
 var windows = workspace.windowList();
 for (var i = 0; i < windows.length; i++) {
@@ -24,8 +26,11 @@ for (var i = 0; i < windows.length; i++) {
     seen = seen + 1;
     w.keepAbove = true;
     w.minimized = false;
-    if (String(w.caption || "").toLowerCase().indexOf("about") >= 0) {
+    var caption = String(w.caption || "").toLowerCase();
+    if (caption.indexOf("about") >= 0) {
         about = w;
+    } else if (caption.indexOf("settings") >= 0) {
+        settings = w;
     } else {
         main = w;
     }
@@ -33,9 +38,11 @@ for (var i = 0; i < windows.length; i++) {
 
 if (about !== null) {
     workspace.activeWindow = about;
+} else if (settings !== null) {
+    workspace.activeWindow = settings;
 } else if (main !== null) {
     workspace.activeWindow = main;
 }
 
 print("embr-raise: " + seen + " window(s); activated "
-      + (about !== null ? "about" : (main !== null ? "main" : "none")));
+      + (about !== null ? "about" : (settings !== null ? "settings" : (main !== null ? "main" : "none"))));

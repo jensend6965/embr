@@ -36,7 +36,7 @@ use embr_core::{DIM, Snapshot, TrayIcon, TrayLook, TrayStyle, TrayTextColor, WHI
 use ksni::menu::{MenuItem, StandardItem, SubMenu};
 use ksni::{Handle, Icon, ToolTip, Tray};
 
-use crate::messages::{Command, UiRequest};
+use crate::TrayAction;
 
 /// Toolbar pictogram: one template for every shape, in the icon's own 22-unit square.
 const ICON_SIDE: i32 = 22;
@@ -79,12 +79,12 @@ pub struct EmbrTray {
     look: TrayLook,
     /// Every device, for the menu.
     devices: Vec<String>,
-    commands: Sender<Command>,
-    ui: Sender<UiRequest>,
+    /// Where a click on this icon is reported.
+    actions: Sender<TrayAction>,
 }
 
 impl EmbrTray {
-    pub fn new(id: String, commands: Sender<Command>, ui: Sender<UiRequest>) -> Self {
+    pub fn new(id: String, actions: Sender<TrayAction>) -> Self {
         Self {
             id,
             key: None,
@@ -95,8 +95,7 @@ impl EmbrTray {
             faulty: false,
             look: TrayLook::default(),
             devices: Vec::new(),
-            commands,
-            ui,
+            actions,
         }
     }
 
@@ -127,11 +126,10 @@ impl EmbrTray {
     fn show_window(&self) {
         // An icon that is about one device is a click on that device: the window opens on the
         // hardware the icon was reporting, not on whatever was selected last.
-        let request = match &self.key {
-            Some(key) => UiRequest::ShowDevice(key.clone()),
-            None => UiRequest::ShowWindow,
+        let request = TrayAction::ShowWindow {
+            key: self.key.clone(),
         };
-        if self.ui.send(request).is_err() {
+        if self.actions.send(request).is_err() {
             eprintln!("[tray] the window is gone; nothing to show");
         }
     }
@@ -139,8 +137,8 @@ impl EmbrTray {
     fn refresh(&self) {
         // A menu click is the user asking, exactly like the Rescan button: the sweep that
         // follows gives a device that has not answered yet the longer waits.
-        if self.commands.send(Command::Rescan).is_err() {
-            eprintln!("[tray] the device thread has stopped; cannot rescan");
+        if self.actions.send(TrayAction::Rescan).is_err() {
+            eprintln!("[tray] the window is gone; cannot rescan");
         }
     }
 }
@@ -158,18 +156,16 @@ type Live = (String, Handle<EmbrTray>);
 #[derive(Clone)]
 pub struct Icons {
     live: Arc<Mutex<Vec<Live>>>,
-    commands: Sender<Command>,
-    ui: Sender<UiRequest>,
+    actions: Sender<TrayAction>,
 }
 
 impl Icons {
     /// The senders are kept here rather than passed on every call: this is the one place that makes
     /// tray items, and an item needs a way to ask for a rescan and a way to show the window.
-    pub fn new(commands: Sender<Command>, ui: Sender<UiRequest>) -> Self {
+    pub fn new(actions: Sender<TrayAction>) -> Self {
         Self {
             live: Arc::new(Mutex::new(Vec::new())),
-            commands,
-            ui,
+            actions,
         }
     }
 
@@ -199,8 +195,7 @@ impl Icons {
             match live.iter().find(|(live_id, _)| *live_id == id) {
                 Some((_, handle)) => handle.update(|item| item.observe(icon, menu, look)),
                 None => {
-                    let mut item =
-                        EmbrTray::new(id.clone(), self.commands.clone(), self.ui.clone());
+                    let mut item = EmbrTray::new(id.clone(), self.actions.clone());
                     item.observe(icon, menu, look);
                     let service = ksni::TrayService::new(item);
                     let handle = service.handle();
@@ -345,7 +340,7 @@ impl Tray for EmbrTray {
             StandardItem {
                 label: "Quit".to_string(),
                 activate: Box::new(|tray: &mut Self| {
-                    if tray.ui.send(UiRequest::Quit).is_err() {
+                    if tray.actions.send(TrayAction::Quit).is_err() {
                         eprintln!("[tray] the window is gone; exiting anyway");
                         std::process::exit(0);
                     }
@@ -481,7 +476,7 @@ fn fraction_of(level: Option<u8>) -> f32 {
 /// The shapes are monochrome line drawings: the level is how much of the box is filled, which
 /// needs no colour, and the one style that has colour at all is the percentage, whose digits take
 /// the colour the user chose.
-fn glyph(look: TrayLook, level: Option<u8>, charging: bool, faulty: bool) -> Icon {
+pub fn glyph(look: TrayLook, level: Option<u8>, charging: bool, faulty: bool) -> Icon {
     match look.style {
         TrayStyle::Battery => battery_icon(level, false),
         TrayStyle::BatteryVertical => battery_icon(level, true),
@@ -510,30 +505,6 @@ pub fn preview(style: TrayStyle, text_color: TrayTextColor) -> Icon {
         TrayStyle::Percent => glyph(look, Some(65), false, false),
         _ => glyph(look, Some(35), false, false),
     }
-}
-
-/// A pictogram as a Slint image, for the settings page's picker.
-///
-/// The pixmap is ARGB in network byte order (what a StatusNotifierItem carries); Slint wants RGBA
-/// with the colour premultiplied by the alpha, which is the only conversion here.
-pub fn image(icon: &Icon) -> slint::Image {
-    let width = u32::try_from(icon.width).unwrap_or(0);
-    let height = u32::try_from(icon.height).unwrap_or(0);
-    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
-    let pixels = buffer.make_mut_slice();
-    for (index, pixel) in pixels.iter_mut().enumerate() {
-        let offset = index * 4;
-        let Some(bytes) = icon.data.get(offset..offset + 4) else {
-            continue;
-        };
-        let alpha = bytes[0];
-        let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
-        pixel.r = premultiply(bytes[1]);
-        pixel.g = premultiply(bytes[2]);
-        pixel.b = premultiply(bytes[3]);
-        pixel.a = alpha;
-    }
-    slint::Image::from_rgba8(buffer)
 }
 
 /// A ring whose arc is the level: the style for a panel where a circle reads better than a bar.
@@ -755,6 +726,9 @@ mod tests {
             faulty: false,
             alert_below: None,
             alert_below_effective: 20,
+            level: None,
+            pages: None,
+            pages_partial: false,
             error: None,
             captured: None,
         }
@@ -807,9 +781,8 @@ mod tests {
     }
 
     fn tray(level: Option<u8>, style: TrayStyle) -> EmbrTray {
-        let (commands, _) = std::sync::mpsc::channel();
-        let (ui, _) = std::sync::mpsc::channel();
-        let mut tray = EmbrTray::new("embr".to_string(), commands, ui);
+        let (actions, _) = std::sync::mpsc::channel();
+        let mut tray = EmbrTray::new("embr".to_string(), actions);
         let icon = TrayIcon {
             key: None,
             title: "Embr".to_string(),
@@ -1117,9 +1090,8 @@ mod tests {
 
     #[test]
     fn each_icon_draws_the_device_it_is_about() {
-        let (commands, _) = std::sync::mpsc::channel();
-        let (ui, _) = std::sync::mpsc::channel();
-        let mut item = EmbrTray::new("embr-hidraw8".to_string(), commands, ui);
+        let (actions, _) = std::sync::mpsc::channel();
+        let mut item = EmbrTray::new("embr-hidraw8".to_string(), actions);
 
         let snapshot = snapshot(vec![
             view("hidraw7", Some(92)),
@@ -1144,9 +1116,8 @@ mod tests {
 
     #[test]
     fn the_default_icon_still_follows_the_worst_device() {
-        let (commands, _) = std::sync::mpsc::channel();
-        let (ui, _) = std::sync::mpsc::channel();
-        let mut item = EmbrTray::new("embr".to_string(), commands, ui);
+        let (actions, _) = std::sync::mpsc::channel();
+        let mut item = EmbrTray::new("embr".to_string(), actions);
 
         let snapshot = snapshot(vec![view("hidraw7", Some(88)), view("hidraw8", Some(19))]);
         let icons = embr_core::tray_icons(&snapshot, &[]);

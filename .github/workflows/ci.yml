@@ -14,15 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Slint's Gl/Femtovg renderer links against the system font and input stack, and the tray
-      # item (`ksni` 0.2) links against libdbus — it has no pure-Rust D-Bus backend. The protocol
-      # crate itself needs nothing but `libc`.
+      # The window is GTK 4 + libadwaita, and the tray item (`ksni` 0.2, in `embr-desktop`) links
+      # against libdbus — it has no pure-Rust D-Bus backend. The fontconfig/freetype/xkbcommon/GL
+      # packages come in with GTK and are listed so a future dependency cannot need them silently.
+      # The protocol crate itself needs nothing but `libc`.
       - name: system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libgl1-mesa-dev \
-            libdbus-1-dev pkg-config
+            libdbus-1-dev libgtk-4-dev libadwaita-1-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
         with:
