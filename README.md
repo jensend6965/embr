@@ -20,28 +20,12 @@ notifications.
 
 ## How this was written
 
-**Most of this code was written by an AI assistant, not by hand.** Jensen — the name on the
-commits — directs the project: he decides what Embr should do, what it must not do, and what
-"correct" means. An AI assistant (Hermes Agent, running large language models) writes the code:
-the Rust, the Slint interface, the tests, the comments, and this file. It is made in conversation —
-he asks for a change or reports what the app did wrong, the assistant makes it, runs the suite and
-reports what it checked on the hardware.
+**This project is written with AI.** Jensen — the name on the commits — sets the requirements,
+decides what Embr should do, and does the review and all testing on real hardware; the code, tests,
+comments and this file are written by an AI assistant.
 
-That is worth saying plainly, because it changes what you should do with what you find here:
-
-* **Treat it as unreviewed work by a competent stranger.** Nothing here has had a second pair of
-  human eyes. The protocol layer was measured against real devices and there are tests, but the
-  design and the code are the model's, and a model can be confidently wrong in ways that compile,
-  pass tests and read tidily.
-* **The comments and commit messages are claims, not evidence.** Every file explains itself and
-  says why a thing is the way it is — written by the same process as the code it describes. Where
-  it matters, check the explanation against the code.
-* **What was not delegated:** the requirements, the decisions about what Embr does, the review of
-  each change before it landed, and all testing on physical hardware — three Logitech peripherals
-  on CachyOS with KWin and Wayland, the only environment this has ever run in. The assistant has
-  never seen those devices: everything in `crates/embr-hidpp` comes from the public HID++
-  documentation and from measurements taken on this machine, and the constants taken from Solaar
-  are marked as such (see [Licence](#licence)).
+So treat it as unreviewed work: no second pair of human eyes has been over it, and the comments
+and commit messages are claims rather than evidence.
 
 Practically: read it before you run it, and report what breaks. HID++ has no read-only mode, so
 "just trying it" means writing to your devices.
@@ -72,11 +56,13 @@ Practically: read it before you run it, and report what breaks. HID++ has no rea
   seconds, and one that comes back does too, from the kernel — a HID device that came or went is
   announced by a uevent, which Embr hears and sweeps on at once. Nothing is polled to find out that
   nothing changed: between the short questions above, listening costs nothing.
-* **Tray icon and notifications.** The icon is a battery coloured by the worst device — or the
-  worst level itself, as a number, if you would rather read it than measure it. Any device can be
-  given an icon of its own instead (Settings → Tray): one icon per device, each showing *its* level,
-  the way a monitoring overlay puts a readout per sensor on screen. With nothing chosen there is one
-  icon and it follows the lowest charge.
+* **Tray icon and notifications.** Five styles, chosen in Settings: a battery whose colour is the
+  level, the same battery standing on end, the level itself as digits, a ring that fills as the
+  charge rises, and *level and status* — a battery whose fill is the level, with a bolt while the
+  device is charging and a warning when it reports a battery fault. Any device can be given an icon
+  of its own instead (Settings → Tray): one icon per device, each showing *its* level, the way a
+  monitoring overlay puts a readout per sensor on screen. With nothing chosen there is one icon and
+  it follows the lowest charge.
 * **Notifications** stay off until you switch them on; then they have thresholds, hysteresis,
   one-per-crossing de-duplication, rate limiting and a snooze.
 * **A threshold of its own for any device** you ask for one. A headset and a mouse do not drain at

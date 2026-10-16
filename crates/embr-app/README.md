@@ -86,8 +86,9 @@ it — see the repository README for the install steps.
   percentage and a switched-off headset that says so.
 * **Between sweeps it holds no device open.** `Monitor::refresh_with()` opens what each query
   needs and closes it again before returning.
-* **Snooze** on every row calls `Monitor::snooze(device.key)`; the *Battery notifications*
-  switch calls `Monitor::set_notifications_enabled()` and persists the choice through
+* **Snooze** lives in the details card, under the alert level, and calls
+  `Monitor::snooze(device.key)`; the *Battery notifications* switch calls
+  `Monitor::set_notifications_enabled()` and persists the choice through
   `core`'s own config writer. Notifications are **off until the user turns them on** — that is
   the default and this app never overrides it.
 * **Notifications** carry the title and body from `Alert::title_and_body()` plus a
@@ -103,7 +104,17 @@ it — see the repository README for the install steps.
   windows and Slint's own tray icon, and this app's tray item belongs to `ksni` on another thread.
   With the option off, the close button quits.
 * **Tray icons**: the tooltip is `Snapshot::tray_tooltip()`, and the pictograms are drawn in code as
-  22×22 ARGB32 pixmaps — a battery, or a level as digits when *Tray icon shows the level* is on.
+  22×22 ARGB32 pixmaps — one function per style in `tray.rs`, chosen by `ui.tray_style`
+  (`core::TrayStyle`): a battery, the same battery standing on end, the level as digits, a ring whose
+  arc is the level, and *level and status* — the battery with a bolt while charging and a mark for a
+  device that reports a fault. Every shape that is not text comes from one template — a rounded body
+  and a nub, drawn as a white line two units thick on integer coordinates so it comes out crisp
+  rather than smeared — and the level is how much of the tube is filled, which needs no colour. The
+  percentage style is the one shape with colour at all, and `ui.tray_text_color` (`TrayTextColor`)
+  picks it: *by level* (the default: red, amber, green) or a fixed white, green, amber, red, blue or
+  grey. The settings page's picker shows these very pixmaps as its previews (`tray::preview` →
+  `tray::image`), so what is offered is what the bar draws, and the colour picker only appears under
+  the style that has text to colour. With nothing to read, every style says so with an empty tube.
   Which icons exist is `core::tray_icons`: nothing chosen means one icon that follows the worst
   device, and a device the user picked in Settings gets one of its own, each about that device.
   They register as `embr` and `embr-<device key>`, so a bar that draws only what it has pinned
@@ -133,13 +144,31 @@ tray click reaches the window within half a second without any cross-thread UI c
 
 ## Pages
 
-The header switches between two pages. **Devices** is the list and the details card, which holds
-the one setting that belongs to a device — its own low-battery level. **Settings** is everything
-that belongs to the application: notifications, the shared thresholds, close-to-tray, the refresh
-interval, the tray icon style, Quit, and the path of the settings file.
+The header switches between two pages. **Devices** is the list and the details card. A row is the
+device's glyph, its name across the whole width of the row, the battery bar with its percentage, and
+a line with the status, the kind and how old the reading is — the connection badge and the Snooze
+button are *not* in the row: the badge is what used to squeeze the name, and both are in the details
+card, which holds the one setting that belongs to a device (its own low-battery level) and the
+Snooze that acts on it.
+
+**Settings** is everything that belongs to the application, in cards rather than a stack of loose
+rows: *Tray icon* (the style picker, whose tiles are the tray's own pixmaps, and one icon per
+device), *One icon per device*, *Notifications*, *Refreshing*, *Window* (close to tray, Quit) and
+*Settings file*. Rows inside a card are flat, separated by a hairline, and carry their own caption.
 
 A page is an `if cond : Layout { ... }` branch, not a `visible:` property: an invisible layout
 child is still laid out, which put the settings page *below* the devices page, out of view.
+
+### The settings page and Scrolling
+
+**The last card of the settings page cannot be scrolled to.** The page is a `ScrollView`, and in
+this Slint version (1.18) its content height comes out roughly one child short: measured with
+marker children at the end of the page, the scroll range stops one card above the content's real
+bottom, so *Settings file* stays out of reach however far you scroll. The cause is in the widget,
+not in the page's `.slint` code — the layout is laid out correctly, and the content's *rendered*
+bottom is below the last position the scrollbar allows. It is left as it is rather than papered
+over: the honest fix is either a hand-rolled scroll area or an upstream report, and neither belongs
+in this change.
 
 ## Tray icons on KineticWE / Noctalia: the pinning caveat
 
@@ -174,12 +203,28 @@ the change to take effect.
 * **One instance per session.** Nothing stops a second `embr` from starting and registering a
   second tray item; the first one's window would then be reachable only from its own tray item.
 
-## Hidden debug flag
+## Hidden debug flags
 
 ```sh
-EMBR_DEBUG_ALERT=1 ./target/release/embr
+EMBR_DEBUG_ALERT=1 ./target/release/embr        # one synthetic low-battery alert per sweep
+EMBR_DEBUG_ABOUT=1 ./target/release/embr        # open the About window at startup
+EMBR_DEBUG_SETTINGS=1 ./target/release/embr     # open the window on the Settings page
+EMBR_DEBUG_SETTINGS=1 EMBR_DEBUG_SCROLL=-400 ./target/release/embr   # …and scroll it down
 ```
 
-After every sweep this sends one synthetic low-battery alert through the same code a real one
-takes (`dispatch_alert` → notification thread → `notify-rust`), which is how the notification
-path is exercised while notifications are off. It changes nothing else.
+`EMBR_DEBUG_ALERT` sends one synthetic low-battery alert through the same code a real one takes
+(`dispatch_alert` → notification thread → `notify-rust`), which is how the notification path is
+exercised while notifications are off. It changes nothing else.
+
+The other three exist because both are otherwise click-only: the Settings page needs a click on the
+header, and the part of it below the fold needs a wheel. `EMBR_DEBUG_SCROLL` (a negative amount
+scrolls down, delivered four times a second for a few seconds) goes through
+`WindowEvent::PointerScrolled` and `dispatch_event` — the entry point the backend itself uses — so
+only the transport leg, the compositor handing over a wheel event, is skipped. They change nothing
+else either.
+
+`scripts/dev/shot.sh` puts those flags to work: it runs the binary against a sandbox
+`XDG_CONFIG_HOME` (never the real `~/.config/embr`), raises the window through KWin
+(`scripts/dev/kwin-raise-windows.js`) and captures just it — `./scripts/dev/shot.sh <sandbox-dir>
+<out.png> [settings|devices] [scroll]`. One caveat: `EMBR_DEBUG_SETTINGS` is read with `is_some()`,
+so it must be *absent* for the Devices page rather than set to `0`.
