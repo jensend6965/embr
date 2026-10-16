@@ -16,7 +16,10 @@ use std::time::{Duration, Instant};
 
 use embr_hidpp::discover::{self, DiscoveryReport};
 
-pub use config::{Config, Notifications, default_path};
+pub use config::{
+    Config, DIM, LEVEL_COLORS, Notifications, TrayLook, TrayStyle, TrayTextColor, WHITE,
+    default_path, level_color,
+};
 pub use embr_hidpp::Uevents;
 pub use embr_hidpp::discover::Patience;
 pub use policy::{Alert, BatteryPolicy, PolicySettings};
@@ -139,7 +142,7 @@ impl Monitor {
     pub fn new(config: Config) -> Self {
         let mut notices = Vec::new();
         if !config.notifications.enabled {
-            notices.push("Battery notifications are off. Turn them on in Settings.".to_string());
+            notices.push("Battery notifications are off — a low battery is shown in the window, but never announced.".to_string());
         }
         let policy = BatteryPolicy::new(settings_from(&config));
         let snapshot = Snapshot::default();
@@ -260,9 +263,15 @@ impl Monitor {
         self.save_config()
     }
 
-    /// Draw the worst battery as a number in the tray icon, or as the battery glyph.
-    pub fn set_tray_shows_percent(&mut self, enabled: bool) -> Result<(), String> {
-        self.config.ui.tray_shows_percent = enabled;
+    /// Draw the tray icon in another style — the same reading, a different shape.
+    pub fn set_tray_style(&mut self, style: TrayStyle) -> Result<(), String> {
+        self.config.ui.tray_style = style.as_str().to_string();
+        self.save_config()
+    }
+
+    /// Draw the percentage style's digits in another colour.
+    pub fn set_tray_text_color(&mut self, color: TrayTextColor) -> Result<(), String> {
+        self.config.ui.tray_text_color = color.as_str().to_string();
         self.save_config()
     }
 

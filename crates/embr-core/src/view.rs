@@ -148,8 +148,15 @@ pub struct TrayIcon {
     pub title: String,
     /// What the tooltip says.
     pub detail: String,
-    /// The level to draw — as the number itself, or as the colour of the battery glyph.
+    /// The level to draw — as the number itself, as the colour of the battery glyph, or as how
+    /// full the icon is.
     pub level: Option<u8>,
+    /// The device is on external power. The `status` style draws a bolt for this, and it is the
+    /// one thing about a battery that the level alone cannot say.
+    pub charging: bool,
+    /// The device itself reports a broken or overheated battery: nothing about the level is worth
+    /// drawing until that is dealt with.
+    pub faulty: bool,
 }
 
 impl TrayIcon {
@@ -186,11 +193,16 @@ fn id_safe(key: &str) -> String {
 /// show, and the tooltip says which of the two it is.
 pub fn tray_icons(snapshot: &Snapshot, chosen: &[String]) -> Vec<TrayIcon> {
     if chosen.is_empty() {
+        let worst = snapshot.lowest();
         return vec![TrayIcon {
             key: None,
             title: "Embr".to_string(),
             detail: snapshot.tray_tooltip(),
-            level: snapshot.lowest().and_then(|device| device.percent),
+            level: worst.and_then(|device| device.percent),
+            // The state comes from the device the icon is about, like the level does: an icon
+            // that said "charging" while showing the mouse's charge would be worse than useless.
+            charging: worst.is_some_and(|device| device.charging),
+            faulty: worst.is_some_and(|device| device.faulty),
         }];
     }
 
@@ -211,12 +223,16 @@ pub fn tray_icons(snapshot: &Snapshot, chosen: &[String]) -> Vec<TrayIcon> {
                         format!("{} — {}", device.name, device.status)
                     },
                     level: device.percent,
+                    charging: device.charging,
+                    faulty: device.faulty,
                 },
                 None => TrayIcon {
                     key: Some(key.clone()),
                     title: "Embr".to_string(),
                     detail: "Not attached: this device is not here right now.".to_string(),
                     level: None,
+                    charging: false,
+                    faulty: false,
                 },
             }
         })
@@ -381,12 +397,65 @@ mod tests {
             title: String::new(),
             detail: String::new(),
             level: None,
+            charging: false,
+            faulty: false,
         };
         assert_eq!(
             icon.id(),
             "embr-0005-046D-B025",
             "an id a bar can be asked to pin, whatever the kernel called the device"
         );
+    }
+
+    #[test]
+    fn an_icon_carries_the_state_of_the_device_it_is_about() {
+        // The status style draws a bolt for this: if the state came from anywhere but the device
+        // the level came from, the icon would contradict itself.
+        let mut charging = device("Keyboard", Some((88, PercentSource::Device)));
+        charging.battery = Some(BatteryReading::new(
+            Some(Percent {
+                value: 88,
+                source: PercentSource::Device,
+            }),
+            Some(4100),
+            ChargeStatus::Recharging,
+        ));
+        let snapshot = Snapshot::from_report(
+            &report(vec![
+                device("Mouse", Some((40, PercentSource::Device))),
+                charging,
+            ]),
+            &config(),
+        );
+
+        let worst = tray_icons(&snapshot, &[]);
+        assert_eq!(worst[0].level, Some(40), "the worst battery is the mouse");
+        assert!(
+            !worst[0].charging,
+            "and the icon does not borrow the keyboard's state"
+        );
+
+        let chosen = tray_icons(&snapshot, &["keyboard".to_string()]);
+        assert_eq!(chosen[0].level, Some(88));
+        assert!(
+            chosen[0].charging,
+            "the keyboard's own icon says it is on external power"
+        );
+
+        // A device that calls its own battery broken says so in the icon, whatever the level.
+        let mut faulty = device("Fault", Some((50, PercentSource::Device)));
+        faulty.battery = Some(BatteryReading::new(
+            Some(Percent {
+                value: 50,
+                source: PercentSource::Device,
+            }),
+            Some(3900),
+            ChargeStatus::InvalidBattery,
+        ));
+        let broken = Snapshot::from_report(&report(vec![faulty]), &config());
+        let icon = tray_icons(&broken, &[]);
+        assert!(icon[0].faulty, "a fault is not a level");
+        assert!(!icon[0].charging);
     }
 
     #[test]

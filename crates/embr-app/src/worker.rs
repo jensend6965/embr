@@ -139,15 +139,25 @@ impl DeviceWorker {
                         // user wondering whether the setting did anything at all.
                         refresh = true;
                     }
-                    Command::SetTrayPercent(enabled) => {
-                        match self.monitor.set_tray_shows_percent(enabled) {
+                    Command::SetTrayTextColor(color) => {
+                        match self.monitor.set_tray_text_color(color) {
                             Ok(()) => eprintln!(
-                                "[devices] the tray icon shows {}",
-                                if enabled {
-                                    "the lowest percentage"
-                                } else {
-                                    "a battery"
-                                }
+                                "[devices] the tray icon's text is drawn {} ({})",
+                                color.label(),
+                                color.as_str()
+                            ),
+                            Err(problem) => eprintln!(
+                                "[devices] the choice was applied but not saved: {problem}"
+                            ),
+                        }
+                        settings_changed = true;
+                    }
+                    Command::SetTrayStyle(style) => {
+                        match self.monitor.set_tray_style(style) {
+                            Ok(()) => eprintln!(
+                                "[devices] the tray icon is drawn as {} ({})",
+                                style.label(),
+                                style.as_str()
                             ),
                             Err(problem) => eprintln!(
                                 "[devices] the choice was applied but not saved: {problem}"
@@ -291,7 +301,8 @@ impl DeviceWorker {
             notifications_enabled: config.notifications.enabled,
             thresholds_text: thresholds_text(&config.notifications.thresholds),
             refresh_seconds: config.general.refresh_seconds,
-            tray_shows_percent: config.ui.tray_shows_percent,
+            tray_look: config.ui.tray_look(),
+            snooze_minutes: config.notifications.snooze_minutes,
             tray_devices: config.ui.tray_devices.clone(),
             close_to_tray: config.general.close_to_tray,
             watch_devices: config.general.watch_devices,
@@ -312,7 +323,7 @@ impl DeviceWorker {
         self.tray.sync(
             &wanted,
             &crate::tray::labels(snapshot),
-            config.ui.tray_shows_percent,
+            config.ui.tray_look(),
         );
     }
 

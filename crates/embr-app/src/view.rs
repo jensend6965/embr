@@ -6,9 +6,9 @@
 
 use std::time::SystemTime;
 
-use embr_core::{DeviceView, human_age};
+use embr_core::{DeviceView, TrayLook, TrayStyle, TrayTextColor, human_age};
 
-use crate::{Device, TrayChoice};
+use crate::{Device, TrayChoice, TrayColorOption, TrayStyleOption};
 
 /// A stand-in for "nothing selected": Slint has no `Option<Device>` for a property.
 pub fn nothing() -> Device {
@@ -61,6 +61,40 @@ pub fn tray_choice(view: &DeviceView, chosen: &[String]) -> TrayChoice {
         caption: view.connection.clone().into(),
         on: chosen.iter().any(|key| key == &view.key),
     }
+}
+
+/// One option on the tray-style picker: the style, and the pictogram a bar would draw for it.
+///
+/// The preview is the *pixmap* — through `tray::glyph`, the same function the live icon goes
+/// through — and not a second drawing in the `.slint` file, so the picker cannot offer a style
+/// that looks like nothing the tray draws.
+pub fn tray_style_option(style: TrayStyle, look: TrayLook) -> TrayStyleOption {
+    TrayStyleOption {
+        id: style.as_str().into(),
+        label: style.label().into(),
+        caption: style.caption().into(),
+        // The percentage tile is previewed with the colour the user chose, so the two pickers
+        // below each other agree about what the icon will look like.
+        preview: crate::tray::image(&crate::tray::preview(style, look.text_color)),
+        on: style == look.style,
+    }
+}
+
+/// One option on the text-colour picker: the colour, and a swatch of it.
+pub fn tray_color_option(color: TrayTextColor, chosen: TrayTextColor) -> TrayColorOption {
+    let (r, g, b) = color.rgb();
+    TrayColorOption {
+        id: color.as_str().into(),
+        label: color.label().into(),
+        swatch: slint::Color::from_rgb_u8(r, g, b),
+        on: color == chosen,
+    }
+}
+
+/// `Ring — a circle that fills as the charge rises`: what the picker's selection is, in words, for
+/// the line under it.
+pub fn tray_style_caption(chosen: TrayStyle) -> String {
+    format!("{} — {}.", chosen.label(), chosen.caption())
 }
 
 /// `12s ago`, or `never` for a device that has never answered.

@@ -12,6 +12,193 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// The shape the tray icon is drawn as.
+///
+/// The *set* lives here, with the configuration, because it is a user-facing vocabulary rather
+/// than a drawing detail: the settings page lists these in this order, `ui.tray_style` stores them
+/// by [`TrayStyle::as_str`], and the wording below is what the user chooses between. The drawing
+/// itself is the app's — one glyph per style in `tray.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrayStyle {
+    /// A battery, coloured by the level.
+    #[default]
+    Battery,
+    /// The same battery standing on end.
+    BatteryVertical,
+    /// The level itself, as digits.
+    Percent,
+    /// A circle that fills as the charge does.
+    Ring,
+    /// A battery whose fill is the level, with a bolt while it charges and a warning when the
+    /// device reports a fault — the one style that says what the device is *doing* and not only
+    /// how full it is.
+    Status,
+}
+
+impl TrayStyle {
+    /// Every style, in the order the settings page offers them.
+    pub const ALL: [TrayStyle; 5] = [
+        TrayStyle::Battery,
+        TrayStyle::BatteryVertical,
+        TrayStyle::Percent,
+        TrayStyle::Ring,
+        TrayStyle::Status,
+    ];
+
+    /// The name written in `ui.tray_style`. Stable: it sits in a file the user may edit.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TrayStyle::Battery => "battery",
+            TrayStyle::BatteryVertical => "battery-vertical",
+            TrayStyle::Percent => "percent",
+            TrayStyle::Ring => "ring",
+            TrayStyle::Status => "status",
+        }
+    }
+
+    /// The style a name refers to, or `None` for a name this build does not know — which is one
+    /// field falling back to the default, never a configuration that fails to load.
+    pub fn from_name(name: &str) -> Option<TrayStyle> {
+        Self::ALL.into_iter().find(|style| style.as_str() == name)
+    }
+
+    /// What the style is called on the settings page.
+    pub fn label(self) -> &'static str {
+        match self {
+            TrayStyle::Battery => "Battery",
+            TrayStyle::BatteryVertical => "Battery, upright",
+            TrayStyle::Percent => "Percentage",
+            TrayStyle::Ring => "Ring",
+            TrayStyle::Status => "Level and status",
+        }
+    }
+
+    /// One line on what it draws, for the sentence under the picker.
+    pub fn caption(self) -> &'static str {
+        match self {
+            TrayStyle::Battery => "the level is how much of the tube is filled",
+            TrayStyle::BatteryVertical => "the same battery standing on end",
+            TrayStyle::Percent => "the level itself, as digits",
+            TrayStyle::Ring => "a ring that fills as the charge rises",
+            TrayStyle::Status => {
+                "the fill is the level, a bolt while it charges, a mark if it faults"
+            }
+        }
+    }
+}
+
+/// The colour the tray icon's *text* is drawn in — the percentage style's digits.
+///
+/// It is the only colour any style has: the glyphs are line drawings in white, deliberately, so
+/// that one template fits every bar and nothing in the tray shouts. The default is the level
+/// itself, which is what the digits were coloured by before this was a choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrayTextColor {
+    /// Green, amber or red according to the level.
+    #[default]
+    Level,
+    White,
+    Green,
+    Amber,
+    Red,
+    Blue,
+    Grey,
+}
+
+/// Red, amber, green, in that order — a level's colour, and grey when there is nothing to read.
+pub const LEVEL_COLORS: [(u8, u8, u8); 3] = [(242, 114, 111), (61, 220, 151), (244, 193, 80)];
+/// The line every tray glyph is drawn with. White, because that is what reads on the bars this is
+/// for; nothing else in an icon is coloured.
+pub const WHITE: (u8, u8, u8) = (246, 247, 249);
+/// The part of a shape that is not filled yet — the unfilled arc of the ring. Mid grey on purpose:
+/// a dark bar would swallow anything dimmer.
+pub const DIM: (u8, u8, u8) = (110, 116, 124);
+
+impl TrayTextColor {
+    /// Every choice, in the order the settings page offers them.
+    pub const ALL: [TrayTextColor; 7] = [
+        TrayTextColor::Level,
+        TrayTextColor::White,
+        TrayTextColor::Green,
+        TrayTextColor::Amber,
+        TrayTextColor::Red,
+        TrayTextColor::Blue,
+        TrayTextColor::Grey,
+    ];
+
+    /// The name written in `ui.tray_text_color`. Stable: it sits in a file the user may edit.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TrayTextColor::Level => "level",
+            TrayTextColor::White => "white",
+            TrayTextColor::Green => "green",
+            TrayTextColor::Amber => "amber",
+            TrayTextColor::Red => "red",
+            TrayTextColor::Blue => "blue",
+            TrayTextColor::Grey => "grey",
+        }
+    }
+
+    /// The colour a name refers to, or `None` for one this build does not know.
+    pub fn from_name(name: &str) -> Option<TrayTextColor> {
+        Self::ALL.into_iter().find(|color| color.as_str() == name)
+    }
+
+    /// What the choice is called on the settings page.
+    pub fn label(self) -> &'static str {
+        match self {
+            TrayTextColor::Level => "By level",
+            TrayTextColor::White => "White",
+            TrayTextColor::Green => "Green",
+            TrayTextColor::Amber => "Amber",
+            TrayTextColor::Red => "Red",
+            TrayTextColor::Blue => "Blue",
+            TrayTextColor::Grey => "Grey",
+        }
+    }
+
+    /// The colour itself. `Level` is not one colour, so this is the green it is most of the time —
+    /// what its swatch on the settings page shows.
+    pub fn rgb(self) -> (u8, u8, u8) {
+        match self {
+            TrayTextColor::Level => LEVEL_COLORS[1],
+            TrayTextColor::White => WHITE,
+            TrayTextColor::Green => LEVEL_COLORS[1],
+            TrayTextColor::Amber => LEVEL_COLORS[2],
+            TrayTextColor::Red => LEVEL_COLORS[0],
+            TrayTextColor::Blue => (106, 168, 255),
+            TrayTextColor::Grey => (155, 161, 169),
+        }
+    }
+
+    /// The colour to draw a reading in: by level for [`TrayTextColor::Level`], otherwise this
+    /// colour whatever the level is.
+    pub fn color(self, level: Option<u8>) -> (u8, u8, u8) {
+        match self {
+            TrayTextColor::Level => level_color(level),
+            other => other.rgb(),
+        }
+    }
+}
+
+/// The colour a level is drawn in: red, amber, green — grey when there is nothing to read.
+pub fn level_color(level: Option<u8>) -> (u8, u8, u8) {
+    match level {
+        None => (155, 161, 169),
+        Some(percent) if percent <= 20 => LEVEL_COLORS[0],
+        Some(percent) if percent <= 30 => LEVEL_COLORS[2],
+        Some(_) => LEVEL_COLORS[1],
+    }
+}
+
+/// Everything the tray icon is drawn from besides the reading: which shape, and — for the one
+/// style that has text — what colour that text is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TrayLook {
+    pub style: TrayStyle,
+    pub text_color: TrayTextColor,
+}
+
 /// Application directory name used under the XDG config home.
 pub const APP_DIR: &str = "embr";
 pub const FILE_NAME: &str = "config.toml";
@@ -82,11 +269,41 @@ pub struct Ui {
     pub show_voltage: bool,
     /// Mark percentages we inferred from voltage as approximate.
     pub mark_estimates: bool,
-    /// Draw the worst battery as a number in the tray icon instead of the battery glyph.
+    /// Which shape the tray icon is drawn as, by [`TrayStyle::as_str`]. Kept as a string, like
+    /// `theme`: a name this build does not know is one field falling back to the default, not a
+    /// file that fails to load and takes the thresholds with it.
+    pub tray_style: String,
+    /// The colour the percentage style's digits are drawn in, by [`TrayTextColor::as_str`]. The
+    /// only colour the tray icon has; the glyphs themselves are white line drawings.
+    pub tray_text_color: String,
+    /// The switch `tray_style` replaced — `true` meant the level as digits. Read, never written
+    /// (see the comment on the field), so a configuration written before the styles existed keeps
+    /// the icon it chose, and the key disappears the first time anything is saved.
+    #[serde(default, skip_serializing)]
     pub tray_shows_percent: bool,
     /// The devices that get a tray icon of their own, by device key, in the order chosen. Empty —
     /// the default — means one icon that follows the device with the least charge.
     pub tray_devices: Vec<String>,
+}
+
+impl Ui {
+    /// The tray icon's style, with a name this build does not know falling back to the default.
+    pub fn tray_style(&self) -> TrayStyle {
+        TrayStyle::from_name(&self.tray_style).unwrap_or_default()
+    }
+
+    /// The colour of that style's text, likewise.
+    pub fn tray_text_color(&self) -> TrayTextColor {
+        TrayTextColor::from_name(&self.tray_text_color).unwrap_or_default()
+    }
+
+    /// Both of them together: what the tray icons are drawn as, as opposed to what they say.
+    pub fn tray_look(&self) -> TrayLook {
+        TrayLook {
+            style: self.tray_style(),
+            text_color: self.tray_text_color(),
+        }
+    }
 }
 
 impl Default for Ui {
@@ -95,6 +312,8 @@ impl Default for Ui {
             theme: "dark".to_string(),
             show_voltage: true,
             mark_estimates: true,
+            tray_style: TrayStyle::Battery.as_str().to_string(),
+            tray_text_color: TrayTextColor::Level.as_str().to_string(),
             tray_shows_percent: false,
             tray_devices: Vec::new(),
         }
@@ -164,6 +383,19 @@ impl Config {
         }
         if !matches!(self.ui.theme.as_str(), "dark" | "light" | "system") {
             self.ui.theme = "dark".to_string();
+        }
+        // A tray style this build does not know is one field back to the default. And a
+        // configuration written before the styles existed asked for the digits with a switch
+        // (`tray_shows_percent`), which is the one choice that must survive the move — but only
+        // while the stored style is still the default, so a style the user picks here always wins.
+        if self.ui.tray_shows_percent && self.ui.tray_style == TrayStyle::Battery.as_str() {
+            self.ui.tray_style = TrayStyle::Percent.as_str().to_string();
+        }
+        if TrayStyle::from_name(&self.ui.tray_style).is_none() {
+            self.ui.tray_style = TrayStyle::default().as_str().to_string();
+        }
+        if TrayTextColor::from_name(&self.ui.tray_text_color).is_none() {
+            self.ui.tray_text_color = TrayTextColor::default().as_str().to_string();
         }
     }
 }
@@ -355,6 +587,118 @@ mod tests {
     }
 
     #[test]
+    fn every_tray_style_round_trips_through_its_own_name() {
+        for style in TrayStyle::ALL {
+            assert_eq!(
+                TrayStyle::from_name(style.as_str()),
+                Some(style),
+                "{} is written and read back as itself",
+                style.as_str()
+            );
+            let mut config = Config::default();
+            config.ui.tray_style = style.as_str().to_string();
+            config.sanitise();
+            assert_eq!(config.ui.tray_style(), style, "and survives a load");
+        }
+        assert_eq!(
+            TrayStyle::from_name("battery-round"),
+            None,
+            "a name this build does not know is not silently some other style"
+        );
+        assert_eq!(TrayStyle::default(), TrayStyle::Battery);
+    }
+
+    #[test]
+    fn a_style_this_build_does_not_know_falls_back_to_the_default() {
+        let path = scratch("unknown-style");
+        std::fs::write(&path, "[ui]\ntray_style = \"hologram\"\n").unwrap();
+        let (config, problems) = load(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(config.ui.tray_style(), TrayStyle::Battery);
+    }
+
+    #[test]
+    fn every_text_colour_round_trips_through_its_own_name() {
+        for color in TrayTextColor::ALL {
+            assert_eq!(
+                TrayTextColor::from_name(color.as_str()),
+                Some(color),
+                "{} is written and read back as itself",
+                color.as_str()
+            );
+            let mut config = Config::default();
+            config.ui.tray_text_color = color.as_str().to_string();
+            config.sanitise();
+            assert_eq!(config.ui.tray_text_color(), color, "and survives a load");
+        }
+        assert_eq!(
+            TrayTextColor::from_name("chartreuse"),
+            None,
+            "a colour this build does not know is not silently some other colour"
+        );
+        // The default keeps the colour following the level, which is how the digits were coloured
+        // before the choice existed.
+        assert_eq!(TrayTextColor::default(), TrayTextColor::Level);
+    }
+
+    #[test]
+    fn a_text_colour_this_build_does_not_know_falls_back_to_the_level() {
+        let path = scratch("unknown-colour");
+        std::fs::write(
+            &path,
+            "[ui]\ntray_style = \"percent\"\ntray_text_color = \"chartreuse\"\n",
+        )
+        .unwrap();
+        let (config, problems) = load(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(config.ui.tray_text_color(), TrayTextColor::Level);
+        assert_eq!(config.ui.tray_look().style, TrayStyle::Percent);
+    }
+
+    #[test]
+    fn the_look_is_the_two_choices_together() {
+        let mut config = Config::default();
+        config.ui.tray_style = TrayStyle::Ring.as_str().to_string();
+        config.ui.tray_text_color = TrayTextColor::Blue.as_str().to_string();
+        config.sanitise();
+        assert_eq!(
+            config.ui.tray_look(),
+            TrayLook {
+                style: TrayStyle::Ring,
+                text_color: TrayTextColor::Blue,
+            }
+        );
+    }
+
+    #[test]
+    fn the_old_switch_for_the_digits_still_chooses_the_digits() {
+        // Jensen's own file, before the styles existed: the icon he chose must not be lost just
+        // because the key that asked for it was replaced.
+        let path = scratch("legacy-percent");
+        std::fs::write(&path, "[ui]\ntheme = \"dark\"\ntray_shows_percent = true\n").unwrap();
+        let (config, problems) = load(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(config.ui.tray_style(), TrayStyle::Percent);
+
+        // Read once, never written: the first save drops the key, and after that only the style
+        // in the file decides what the icon looks like.
+        save(&config, &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("tray_shows_percent"),
+            "the replaced key must not be written back:\n{text}"
+        );
+        assert!(text.contains("tray_style = \"percent\""), "{text}");
+
+        // And a style chosen here wins over the leftover switch, whatever the file says.
+        let mut chosen = config.clone();
+        chosen.ui.tray_shows_percent = true;
+        chosen.ui.tray_style = "ring".to_string();
+        chosen.sanitise();
+        assert_eq!(chosen.ui.tray_style(), TrayStyle::Ring);
+    }
+
+    #[test]
     fn a_per_device_level_survives_a_save_and_a_reload() {
         let path = scratch("per-device");
         let mut config = Config::default();
@@ -363,7 +707,7 @@ mod tests {
             .notifications
             .per_device
             .insert("G733-0123".to_string(), 35);
-        config.ui.tray_shows_percent = true;
+        config.ui.tray_style = "ring".to_string();
         config
             .ui
             .tray_devices
@@ -373,7 +717,11 @@ mod tests {
         let (loaded, problems) = load(&path);
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(loaded.notifications.per_device.get("G733-0123"), Some(&35));
-        assert!(loaded.ui.tray_shows_percent);
+        assert_eq!(
+            loaded.ui.tray_style(),
+            TrayStyle::Ring,
+            "the style the user chose is the style that comes back"
+        );
         assert_eq!(
             loaded.ui.tray_devices,
             vec!["G733-0123".to_string(), "hidraw8".to_string()],

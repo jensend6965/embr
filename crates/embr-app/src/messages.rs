@@ -7,7 +7,7 @@
 
 use std::sync::mpsc::Sender;
 
-use embr_core::{Alert, Snapshot};
+use embr_core::{Alert, Snapshot, TrayLook, TrayStyle, TrayTextColor};
 
 /// UI thread or tray → the device thread.
 #[derive(Debug, Clone)]
@@ -28,8 +28,10 @@ pub enum Command {
     SetNotifications(bool),
     /// Give one device its own alert level, or (`None`) put it back on the shared thresholds.
     SetDeviceAlertLevel { key: String, level: Option<u8> },
-    /// Draw the worst battery as a number in the tray icon, or as the battery glyph.
-    SetTrayPercent(bool),
+    /// Draw the tray icon in another style.
+    SetTrayStyle(TrayStyle),
+    /// Draw the percentage style's digits in another colour.
+    SetTrayTextColor(TrayTextColor),
     /// Give one device a tray icon of its own, or take it away again.
     SetTrayDevice { key: String, on: bool },
     /// Keep running when the window is closed (tray only), or quit instead.
@@ -66,7 +68,10 @@ pub struct UiState {
     pub notifications_enabled: bool,
     pub thresholds_text: String,
     pub refresh_seconds: u64,
-    pub tray_shows_percent: bool,
+    /// Which shape the tray icon is drawn as, and the colour of its text when it has any.
+    pub tray_look: TrayLook,
+    /// How long a snooze keeps quiet, so the row beside the device can say so.
+    pub snooze_minutes: u64,
     /// The devices the user gave a tray icon of their own, by key.
     pub tray_devices: Vec<String>,
     pub close_to_tray: bool,
@@ -99,6 +104,16 @@ pub fn thresholds_text(thresholds: &[u8]) -> String {
         .map(|level| format!("{level} %"))
         .collect::<Vec<String>>()
         .join(" / ")
+}
+
+/// `quiet about this device for 30 minutes` — the caption under the Snooze row, from the
+/// configured period rather than a number written into the window.
+pub fn snooze_caption(minutes: u64) -> String {
+    match minutes {
+        0 => "quiet about this device until you say otherwise".to_string(),
+        1 => "quiet about this device for a minute".to_string(),
+        minutes => format!("quiet about this device for {minutes} minutes"),
+    }
 }
 
 /// Hand an alert to the notification thread, or say why it could not be handed over.

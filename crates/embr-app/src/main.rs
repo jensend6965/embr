@@ -30,7 +30,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 
-use embr_core::{WindowClose, window_close_action};
+use embr_core::{TrayLook, TrayStyle, TrayTextColor, WindowClose, window_close_action};
 use slint::{CloseRequestResponse, Model, ModelRc, VecModel};
 
 use messages::{Command, Notice, UiRequest, UiState, dispatch_note};
@@ -55,7 +55,7 @@ const SETTLE: Duration = Duration::from_secs(2);
 #[derive(Clone)]
 struct Pushed {
     notifications: Rc<Cell<bool>>,
-    tray_percent: Rc<Cell<bool>>,
+    tray_look: Rc<Cell<TrayLook>>,
     close_to_tray: Rc<Cell<bool>>,
     watch_devices: Rc<Cell<bool>>,
     alert_pending: Pending,
@@ -66,12 +66,56 @@ impl Pushed {
     fn new() -> Self {
         Self {
             notifications: Rc::new(Cell::new(false)),
-            tray_percent: Rc::new(Cell::new(false)),
+            tray_look: Rc::new(Cell::new(TrayLook::default())),
             close_to_tray: Rc::new(Cell::new(true)),
             watch_devices: Rc::new(Cell::new(true)),
             alert_pending: Pending::new(),
             refresh_pending: Pending::new(),
         }
+    }
+}
+
+/// The three models the window draws from, kept together because every snapshot writes all of
+/// them and a function that takes them one by one stops being readable.
+#[derive(Clone)]
+struct Models {
+    devices: Rc<VecModel<Device>>,
+    tray_choices: Rc<VecModel<TrayChoice>>,
+    tray_styles: Rc<VecModel<TrayStyleOption>>,
+    tray_colors: Rc<VecModel<TrayColorOption>>,
+}
+
+impl Models {
+    fn new() -> Self {
+        Self {
+            devices: Rc::new(VecModel::default()),
+            tray_choices: Rc::new(VecModel::default()),
+            tray_styles: Rc::new(VecModel::default()),
+            tray_colors: Rc::new(VecModel::default()),
+        }
+    }
+
+    /// Show one look as the chosen one: both pickers, the sentence under the first, and the record
+    /// of what the window has already drawn. Called when the user picks something and when a
+    /// snapshot reports a look the window has not drawn yet (a fresh start, or a config edited by
+    /// hand).
+    fn show_tray_look(&self, window: &AppWindow, pushed: &Pushed, look: TrayLook) {
+        self.tray_styles.set_vec(
+            TrayStyle::ALL
+                .into_iter()
+                .map(|candidate| view::tray_style_option(candidate, look))
+                .collect::<Vec<_>>(),
+        );
+        self.tray_colors.set_vec(
+            TrayTextColor::ALL
+                .into_iter()
+                .map(|candidate| view::tray_color_option(candidate, look.text_color))
+                .collect::<Vec<_>>(),
+        );
+        window.set_tray_style_caption(view::tray_style_caption(look.style).into());
+        // The one style that has any text is the percentage: nothing else reads a colour.
+        window.set_tray_has_text(look.style == TrayStyle::Percent);
+        pushed.tray_look.set(look);
     }
 }
 
@@ -145,15 +189,22 @@ fn main() -> Result<(), slint::PlatformError> {
         Err(problem) => eprintln!("[app] no device thread: {problem} — the window will stay empty"),
     }
 
-    let rows: Rc<VecModel<Device>> = Rc::new(VecModel::default());
-    window.set_devices(ModelRc::from(rows.clone()));
-    let choices: Rc<VecModel<TrayChoice>> = Rc::new(VecModel::default());
-    window.set_tray_choices(ModelRc::from(choices.clone()));
+    let models = Models::new();
+    window.set_devices(ModelRc::from(models.devices.clone()));
+    window.set_tray_choices(ModelRc::from(models.tray_choices.clone()));
+    // The style picker: five tiles whose pictures are the tray's own pixmaps. Built with the
+    // default at first — the configuration only arrives with the first snapshot, and a picker
+    // with no selection at all for two seconds would be worse than one that corrects itself.
+    window.set_tray_styles(ModelRc::from(models.tray_styles.clone()));
+    window.set_tray_colors(ModelRc::from(models.tray_colors.clone()));
     window.set_refreshing(true);
 
     let latest: SharedState = Rc::new(RefCell::new(None));
     let selection: Selection = Rc::new(RefCell::new(None));
     let pushed = Pushed::new();
+    // …and the picker starts out agreed with it, so the first snapshot does not rebuild five
+    // tiles that are already right.
+    models.show_tray_look(&window, &pushed, TrayLook::default());
     // Whether the window is on screen, and when the last sweep was asked for: the two things
     // the scheduled cadence needs (`core::scheduled_interval` decides what they mean).
     let window_open = Rc::new(Cell::new(true));
@@ -275,31 +326,76 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    window.on_tray_percent_toggled({
+    window.on_tray_style_chosen({
+        let window = window.as_weak();
         let commands = commands.clone();
         let pushed = pushed.clone();
         let tray = tray.clone();
-        move |enabled| {
-            if enabled == pushed.tray_percent.get() {
+        let models = models.clone();
+        move |id| {
+            let Some(style) = TrayStyle::from_name(&id) else {
+                // A tile whose id this build does not know: nothing to do but say so. It cannot
+                // happen from the picker, which is built from `TrayStyle::ALL`.
+                eprintln!("[app] unknown tray icon style \"{id}\"; the icon is unchanged");
+                return;
+            };
+            let look = TrayLook {
+                style,
+                ..pushed.tray_look.get()
+            };
+            if look == pushed.tray_look.get() {
+                // The tile that is already chosen, clicked again.
                 return;
             }
-            pushed.tray_percent.set(enabled);
             eprintln!(
-                "[app] the tray icon shows {}",
-                if enabled {
-                    "the lowest percentage"
-                } else {
-                    "a battery"
-                }
+                "[app] the tray icon is drawn as {} ({})",
+                style.label(),
+                style.as_str()
             );
-            // The icon's shape is presentation, not a reading: it changes here and now rather
-            // than waiting for the device thread to come back from a sweep, which can take
-            // seconds. Measured before this: 827 ms of delay with a sweep in flight, 18 ms
-            // without.
-            tray.restyle(enabled);
-            if commands.send(Command::SetTrayPercent(enabled)).is_err() {
-                eprintln!("[app] the device thread has stopped; the choice was not saved");
+            apply_look(
+                &window,
+                &commands,
+                &pushed,
+                &tray,
+                &models,
+                look,
+                Command::SetTrayStyle(style),
+            );
+        }
+    });
+
+    window.on_tray_text_color_chosen({
+        let window = window.as_weak();
+        let commands = commands.clone();
+        let pushed = pushed.clone();
+        let tray = tray.clone();
+        let models = models.clone();
+        move |id| {
+            let Some(color) = TrayTextColor::from_name(&id) else {
+                eprintln!("[app] unknown tray text colour \"{id}\"; the icon is unchanged");
+                return;
+            };
+            let look = TrayLook {
+                text_color: color,
+                ..pushed.tray_look.get()
+            };
+            if look == pushed.tray_look.get() {
+                return;
             }
+            eprintln!(
+                "[app] the tray icon's text is drawn {} ({})",
+                color.label(),
+                color.as_str()
+            );
+            apply_look(
+                &window,
+                &commands,
+                &pushed,
+                &tray,
+                &models,
+                look,
+                Command::SetTrayTextColor(color),
+            );
         }
     });
 
@@ -470,6 +566,33 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // The Settings page is otherwise reachable only by clicking the header button, which makes a
+    // change to it awkward to check. Same shape as EMBR_DEBUG_ABOUT below, and likewise raised from
+    // inside the event loop, because the view is reset whenever the window is brought up.
+    if std::env::var_os("EMBR_DEBUG_SETTINGS").is_some() {
+        window.set_view(1);
+        let window = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(300), move || {
+            if let Some(window) = window.upgrade() {
+                window.set_view(1);
+            }
+        });
+    }
+
+    // The other half of that: the part of the settings page below the fold, which is reachable only
+    // with a wheel. Held in a local — the underscore is deliberate — because a `slint::Timer`
+    // stops when it is dropped.
+    let _debug_scroll = match std::env::var("EMBR_DEBUG_SCROLL") {
+        Ok(amount) => match amount.parse::<f32>() {
+            Ok(amount) => debug_scroll(&window, amount),
+            Err(problem) => {
+                eprintln!("[app] EMBR_DEBUG_SCROLL is not a number ({problem}); not scrolling");
+                slint::Timer::default()
+            }
+        },
+        Err(_) => slint::Timer::default(),
+    };
+
     about.on_close_requested({
         let about = about.as_weak();
         move || {
@@ -485,7 +608,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let window = window.as_weak();
         let latest = latest.clone();
         let selection = selection.clone();
-        let rows = rows.clone();
+        let models = models.clone();
         let pushed = pushed.clone();
         let commands = commands.clone();
         let window_open = window_open.clone();
@@ -493,7 +616,6 @@ fn main() -> Result<(), slint::PlatformError> {
         let last_size = last_size.clone();
         let last_watch = last_watch.clone();
         let attempts = attempts.clone();
-        let choices = choices.clone();
         move || {
             // 1. What the tray or a notification asked the window to do.
             while let Ok(request) = request_queue.try_recv() {
@@ -540,9 +662,7 @@ fn main() -> Result<(), slint::PlatformError> {
             while let Ok(state) = state_queue.try_recv() {
                 let incomplete = state.snapshot.incomplete();
                 if let Some(window) = window.upgrade() {
-                    apply(
-                        &window, &latest, &selection, &rows, &choices, &pushed, state,
-                    );
+                    apply(&window, &latest, &selection, &models, &pushed, state);
                 }
                 // A pass has just finished. The next watch is counted from here rather than from
                 // the moment one was asked for: a pass that took longer than the watch interval
@@ -559,7 +679,7 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             // 3. Keep the relative ages honest.
             if let Some(window) = window.upgrade() {
-                tick_ages(&window, &latest, &selection, &rows);
+                tick_ages(&window, &latest, &selection, &models.devices);
             }
 
             // 3b. Say so when the window's size changes, so that "the layout adapted" and "the
@@ -660,13 +780,77 @@ fn main() -> Result<(), slint::PlatformError> {
     Ok(())
 }
 
+/// Put one look into effect: the icons themselves first (the tray is one D-Bus round trip away,
+/// and a style change must not queue behind a sweep — measured: 827 ms with a sweep in flight, 29 ms
+/// without), then the window, then the choice on its way to the configuration file.
+fn apply_look(
+    window: &slint::Weak<AppWindow>,
+    commands: &std::sync::mpsc::Sender<Command>,
+    pushed: &Pushed,
+    tray: &tray::Icons,
+    models: &Models,
+    look: TrayLook,
+    command: Command,
+) {
+    tray.restyle(look);
+    if let Some(window) = window.upgrade() {
+        models.show_tray_look(&window, pushed, look);
+    } else {
+        pushed.tray_look.set(look);
+    }
+    if commands.send(command).is_err() {
+        eprintln!("[app] the device thread has stopped; the choice was not saved");
+    }
+}
+
+/// `EMBR_DEBUG_SCROLL`: scroll whatever is showing, so a page that continues below the fold can be
+/// photographed on a desktop where nothing can inject a wheel event. The event goes through
+/// `dispatch_event` — the entry point the backend itself uses — so only the transport leg, the
+/// compositor handing over a wheel event, is skipped. The returned timer has to be kept alive.
+fn debug_scroll(window: &AppWindow, amount: f32) -> slint::Timer {
+    let window = window.as_weak();
+    let ticks = Rc::new(Cell::new(0u32));
+    let counter = ticks.clone();
+    let timer = slint::Timer::default();
+    // Started late: events delivered while the window is still being mapped are dropped.
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(250),
+        move || {
+            let round = counter.get();
+            counter.set(round + 1);
+            // The first seconds belong to the window being mapped: events sent before it is up
+            // are dropped by the platform, so the scrolling starts once it is.
+            if round < 16 {
+                return;
+            }
+            if round >= 36 {
+                if round == 36 {
+                    eprintln!("[app] EMBR_DEBUG_SCROLL: 20 scroll events of {amount} delivered");
+                }
+                return;
+            }
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(400.0, 500.0),
+                    delta_x: 0.0,
+                    delta_y: amount,
+                });
+        },
+    );
+    timer
+}
+
 /// Take one snapshot into the window: the list, the detail card and the settings.
 fn apply(
     window: &AppWindow,
     latest: &SharedState,
     selection: &Selection,
-    rows: &Rc<VecModel<Device>>,
-    choices: &Rc<VecModel<TrayChoice>>,
+    models: &Models,
     pushed: &Pushed,
     state: UiState,
 ) {
@@ -688,7 +872,7 @@ fn apply(
             .map(|device| device.key.clone())
     });
 
-    rows.set_vec(
+    models.devices.set_vec(
         state
             .snapshot
             .devices
@@ -698,7 +882,7 @@ fn apply(
     );
 
     // One row per device on the settings page: the devices the user can give an icon of their own.
-    choices.set_vec(
+    models.tray_choices.set_vec(
         state
             .snapshot
             .devices
@@ -710,10 +894,14 @@ fn apply(
     window.set_thresholds_text(state.thresholds_text.clone().into());
     window.set_config_path(state.config_path.clone().into());
     window.set_notice(state.notice.clone().unwrap_or_default().into());
+    window.set_snooze_caption(messages::snooze_caption(state.snooze_minutes).into());
     pushed.notifications.set(state.notifications_enabled);
     window.set_notifications_enabled(state.notifications_enabled);
-    pushed.tray_percent.set(state.tray_shows_percent);
-    window.set_tray_percent(state.tray_shows_percent);
+    // The picker is only rebuilt when the style actually changed — otherwise every snapshot would
+    // make five new preview images to draw the same five pictures.
+    if pushed.tray_look.get() != state.tray_look {
+        models.show_tray_look(window, pushed, state.tray_look);
+    }
     pushed.close_to_tray.set(state.close_to_tray);
     window.set_close_to_tray(state.close_to_tray);
     pushed.watch_devices.set(state.watch_devices);
@@ -723,7 +911,7 @@ fn apply(
     window.set_refreshing(false);
 
     *latest.borrow_mut() = Some(state);
-    tick_ages(window, latest, selection, rows);
+    tick_ages(window, latest, selection, &models.devices);
 }
 
 /// Put the selected device's alert level into the spin box — unless a snapshot from before

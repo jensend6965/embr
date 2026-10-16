@@ -38,6 +38,32 @@ export struct TrayChoice {
     on: bool,
 }
 
+/// One option on the tray-icon picker: a style, and the picture the bar would draw for it.
+///
+/// The picture is the tray's own pixmap, made in Rust, so the picker shows the icon itself rather
+/// than a redrawing of it — a picker that offers something the tray does not draw would be worse
+/// than no picker at all.
+export struct TrayStyleOption {
+    /// The name written in the configuration, and what a click reports: `battery`, `percent`, …
+    id: string,
+    label: string,
+    /// One line on what the style draws.
+    caption: string,
+    preview: image,
+    on: bool,
+}
+
+/// One colour the percentage style's text can be drawn in. The only coloured thing the tray icon
+/// has, so it is the only picker of its kind.
+export struct TrayColorOption {
+    /// The name written in the configuration, and what a click reports: `level`, `white`, …
+    id: string,
+    label: string,
+    /// The colour itself, for the dot on the tile.
+    swatch: color,
+    on: bool,
+}
+
 global Tokens {
     out property <color> bg: #15161a;
     out property <color> surface: #1c1e23;
@@ -224,11 +250,16 @@ component BatteryBar inherits Rectangle {
     }
 }
 
+/// One device in the list: the glyph, the name, the level and what the device is doing.
+///
+/// The connection type and the Snooze action are *not* here. The badge is the widest thing a row
+/// could carry and the least useful — it never changes — and with it gone the name fits the
+/// narrowest the list is allowed to be; both moved into the details card, which is where a device
+/// is read before anything is done about it.
 component DeviceRow inherits Rectangle {
     in property <Device> device;
     in property <bool> is-selected: false;
     callback pick;
-    callback snooze;
 
     height: 96px;
     border-radius: 12px;
@@ -241,7 +272,7 @@ component DeviceRow inherits Rectangle {
         : (is-selected ? Tokens.accent.with-alpha(0.55) : Tokens.border-subtle);
     animate background, border-color { duration: 120ms; }
 
-    // Declared before the content so the Snooze button keeps its own clicks.
+    // Declared before the content so a row is one big click target.
     row-click := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.pick(); }
@@ -255,6 +286,8 @@ component DeviceRow inherits Rectangle {
         spacing: 14px;
         cross-axis-alignment: center;
 
+        // The tile keeps the connection family's colour, so the list still says at a glance how a
+        // device is attached even though the badge is gone.
         Rectangle {
             width: 42px;
             height: 42px;
@@ -274,25 +307,15 @@ component DeviceRow inherits Rectangle {
             spacing: 6px;
             alignment: center;
 
-            HorizontalLayout {
-                spacing: 8px;
-                cross-axis-alignment: center;
-
-                Text {
-                    text: device.name;
-                    font-size: 14px;
-                    font-weight: 600;
-                    color: Tokens.text-primary;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                Badge {
-                    label: device.connection;
-                    tint: Tokens.conn-color(device.connection);
-                }
-
-                Rectangle { horizontal-stretch: 1; }
+            // The name gets the whole width of the row now. A long one still elides — that is what
+            // this does when a name is longer than any window — but nothing competes with it.
+            Text {
+                text: device.name;
+                font-size: 14px;
+                font-weight: 600;
+                color: Tokens.text-primary;
+                vertical-alignment: center;
+                overflow: elide;
             }
 
             HorizontalLayout {
@@ -350,16 +373,6 @@ component DeviceRow inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
-        }
-
-        // Always here, even in a narrow window: the device list is the only place a device can be
-        // snoozed, so the column has a floor of its own (`min-width` below) instead of dropping
-        // the action when space runs out.
-        Button {
-            text: "Snooze";
-            width: 78px;
-            height: 28px;
-            clicked => { root.snooze(); }
         }
     }
 }
@@ -434,17 +447,23 @@ component DetailLine inherits Rectangle {
 
 component SettingRow inherits Rectangle {
     in property <string> title;
+    /// A second, smaller line inside the row: what the setting means, rather than a sentence
+    /// floating between the rows.
+    in property <string> caption: "";
     in property <string> value;
     in property <bool> with-switch: false;
     /// Give this a label to put a button on the right instead of a value or a switch.
     in property <string> button-text: "";
+    /// What the row sits on: raised when it stands on the page by itself, transparent inside a
+    /// card, where the card is the surface.
+    in property <brush> fill: Tokens.surface-raised;
     in-out property <bool> toggled: false;
     callback changed(bool);
     callback acted;
 
     height: 44px;
     border-radius: 10px;
-    background: Tokens.surface-raised;
+    background: fill;
 
     HorizontalLayout {
         padding-left: 14px;
@@ -452,14 +471,26 @@ component SettingRow inherits Rectangle {
         spacing: 10px;
         cross-axis-alignment: center;
 
-        Text {
-            text: title;
-            font-size: 13px;
-            color: Tokens.text-primary;
-            vertical-alignment: center;
-        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            alignment: center;
 
-        Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.title;
+                font-size: 13px;
+                color: Tokens.text-primary;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            if root.caption != "": Text {
+                text: root.caption;
+                font-size: 10px;
+                color: Tokens.text-tertiary;
+                overflow: elide;
+            }
+        }
 
         if with-switch: Switch {
             checked <=> root.toggled;
@@ -498,12 +529,13 @@ component NumberRow inherits Rectangle {
     in property <int> minimum: 5;
     in property <int> maximum: 600;
     in property <int> step: 5;
+    in property <brush> fill: Tokens.surface-raised;
     in-out property <int> number: 60;
     callback numbered(int);
 
     height: 44px;
     border-radius: 10px;
-    background: Tokens.surface-raised;
+    background: fill;
 
     HorizontalLayout {
         padding-left: 14px;
@@ -559,11 +591,12 @@ component ChoiceRow inherits Rectangle {
     in property <string> title;
     in property <string> caption;
     in property <bool> on: false;
+    in property <brush> fill: Tokens.surface-raised;
     callback chosen(bool);
 
     height: 44px;
     border-radius: 10px;
-    background: Tokens.surface-raised;
+    background: fill;
 
     HorizontalLayout {
         padding-left: 14px;
@@ -659,6 +692,195 @@ component AlertLevelRow inherits Rectangle {
     }
 }
 
+/// Snooze, for the selected device. It sits with that device's alert level rather than on every
+/// row: it is something you do about *this* device after reading its numbers, not a column of
+/// identical buttons to aim at in a list.
+component SnoozeRow inherits Rectangle {
+    in property <string> caption;
+    callback snoozed;
+
+    height: 44px;
+    border-radius: 10px;
+    background: Tokens.surface-raised;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            alignment: center;
+
+            Text {
+                text: "Snooze alerts";
+                font-size: 13px;
+                color: Tokens.text-primary;
+            }
+
+            Text {
+                text: root.caption;
+                font-size: 10px;
+                color: Tokens.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        Button {
+            text: "Snooze";
+            width: 78px;
+            height: 28px;
+            clicked => { root.snoozed(); }
+        }
+    }
+}
+
+/// A hairline between two rows of one card. The rows themselves are flat, so this is the only
+/// thing that says where one ends and the next begins.
+component RowSeparator inherits Rectangle {
+    height: 1px;
+    background: Tokens.border-subtle;
+}
+
+/// A group of settings under one heading.
+///
+/// The card is what makes the page read as sections rather than as a stack of loose pills: its own
+/// surface, its own heading, and the rows inside it flat (`fill: transparent`) and separated by
+/// hairlines. Its content is the instantiating file's: a card takes its children here.
+component SettingsCard inherits Rectangle {
+    in property <string> title;
+    /// A sentence under the heading, when the section as a whole needs one.
+    in property <string> caption: "";
+
+    background: Tokens.surface;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: Tokens.border-subtle;
+
+    VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 13px;
+        padding-bottom: 13px;
+        spacing: 8px;
+
+        SectionLabel { text: root.title; }
+
+        if root.caption != "": Caption { text: root.caption; }
+
+        @children
+    }
+}
+
+/// One choice on the tray-icon picker: the icon a bar would draw, and what the style is called.
+///
+/// The picture is the tray's own pixmap at the size the bar draws it, so what is picked here is
+/// exactly what appears in the tray — no preview of an idealised version of it.
+component StyleTile inherits Rectangle {
+    in property <string> label;
+    in property <image> preview;
+    in property <bool> on: false;
+    callback picked;
+
+    width: 108px;
+    height: 78px;
+    border-radius: 10px;
+    background: on ? Tokens.accent.with-alpha(0.14) : Tokens.surface-raised;
+    border-width: 1px;
+    border-color: on ? Tokens.accent.with-alpha(0.55) : Tokens.border-subtle;
+    animate background, border-color { duration: 120ms; }
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 5px;
+        alignment: center;
+
+        // A layout puts a fixed-size child at the start of its cross axis, so the pictogram is
+        // centred inside a full-width strip rather than stretched by the layout.
+        Rectangle {
+            height: 24px;
+            background: transparent;
+
+            Image {
+                source: root.preview;
+                width: 22px;
+                height: 22px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                image-fit: contain;
+            }
+        }
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            color: on ? Tokens.accent : Tokens.text-secondary;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+/// One colour on the text-colour picker: a dot of it, and its name.
+component SwatchTile inherits Rectangle {
+    in property <string> label;
+    in property <color> swatch: #ffffff;
+    in property <bool> on: false;
+    callback picked;
+
+    width: 80px;
+    height: 62px;
+    border-radius: 10px;
+    background: on ? Tokens.accent.with-alpha(0.14) : Tokens.surface-raised;
+    border-width: 1px;
+    border-color: on ? Tokens.accent.with-alpha(0.55) : Tokens.border-subtle;
+    animate background, border-color { duration: 120ms; }
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 4px;
+        alignment: center;
+
+        // A layout puts a fixed-size child at the start of its cross axis, so the dot is centred
+        // inside a full-width strip.
+        Rectangle {
+            height: 20px;
+            background: transparent;
+
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                background: root.swatch;
+                border-width: 1px;
+                border-color: #00000044;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            color: on ? Tokens.accent : Tokens.text-secondary;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "Embr — Logitech devices";
     // Noto Sans is what `sans-serif` resolves to on the major distributions, so the window looks
@@ -695,7 +917,17 @@ export component AppWindow inherits Window {
     /// The selected device's alert level, and whether it is one the user set for it.
     in-out property <int> alert-level: 20;
     in property <bool> alert-custom: false;
-    in-out property <bool> tray-percent: false;
+    /// `quiet about this device for 30 minutes`: what the Snooze row says it will do.
+    in property <string> snooze-caption: "";
+    /// The styles the tray icon can be drawn as, one tile each, with their previews.
+    in property <[TrayStyleOption]> tray-styles: [];
+    /// The colours its text can be drawn in — shown only when the style has any text.
+    in property <[TrayColorOption]> tray-colors: [];
+    /// Whether the chosen style has text at all: a colour picker under a style with no text would
+    /// be a control that does nothing.
+    in property <bool> tray-has-text: false;
+    /// `Battery — the colour is the level: green, amber, red.`: what the chosen style draws.
+    in property <string> tray-style-caption: "";
     /// The devices the settings page offers a tray icon for, one row each.
     in property <[TrayChoice]> tray-choices: [];
     /// Keep running (tray only) when the window is closed, or quit instead.
@@ -716,7 +948,10 @@ export component AppWindow inherits Window {
     callback notifications-toggled(bool);
     callback alert-level-changed(int);
     callback alert-level-cleared();
-    callback tray-percent-toggled(bool);
+    /// One tray-icon style was picked.
+    callback tray-style-chosen(string);
+    /// One colour for the tray icon's text was picked.
+    callback tray-text-color-chosen(string);
     /// One device asked for (or gave up) its own tray icon.
     callback tray-device-toggled(string, bool);
     callback close-to-tray-toggled(bool);
@@ -857,6 +1092,14 @@ export component AppWindow inherits Window {
 
                 ScrollView {
                     vertical-stretch: 1;
+                    // The standard widget's `preferred-height` is 100 % of its parent, which makes
+                    // this list demand as much height as it holds: with more devices than rows fit,
+                    // that demand travels up through the panes and the window's layout ends up
+                    // taller than the window — which is then clipped, and the rows below the fold
+                    // cannot be scrolled to, because the scroll range is measured inside the
+                    // inflated layout. Asking for no height at all, and taking the space the
+                    // layout gives (the stretch above), is what keeps the geometry honest.
+                    preferred-height: 0px;
 
                     VerticalLayout {
                         spacing: 10px;
@@ -865,7 +1108,6 @@ export component AppWindow inherits Window {
                             device: d;
                             is-selected: i == root.selected-index;
                             pick => { root.pick(i); }
-                            snooze => { root.snooze(d.key); }
                         }
 
                         if !root.has-devices: Rectangle {
@@ -1011,6 +1253,11 @@ export component AppWindow inherits Window {
                             cleared => { root.alert-level-cleared(); }
                         }
 
+                        if root.has-devices: SnoozeRow {
+                            caption: root.snooze-caption;
+                            snoozed => { root.snooze(root.selected.key); }
+                        }
+
                         Caption {
                             text: "Every other setting — notifications, the tray icon, what closing the window does — is on the Settings page.";
                         }
@@ -1029,6 +1276,14 @@ export component AppWindow inherits Window {
         // Full width on purpose. A row here is a label at the left and its control at the far
         // right, so the pane uses whatever width the window has rather than sitting in a fixed
         // column in the middle of it — the shape Solaar has when it is maximised.
+        //
+        // One card per subject, in the order of how likely somebody is to come here for it: the
+        // tray icon first, then what the app says to you, then how often it asks, then what it
+        // does with the window, and what it writes down.
+        // The page *is* the scroll view, rather than a scroll view buried in two layouts: that is
+        // the shape Slint's own widget expects, and with the extra layouts around it the widget
+        // measured its own viewport wrongly — the scroll range came out short and the last card of
+        // the page could not be reached. The pane's padding is the content's padding now.
         if root.view == 1: HorizontalLayout {
             padding-left: 20px;
             padding-right: 20px;
@@ -1044,117 +1299,176 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
 
                     VerticalLayout {
-                        spacing: 10px;
+                        spacing: 16px;
 
-                        SectionLabel { text: "NOTIFICATIONS"; }
+                        SettingsCard {
+                            title: "TRAY ICON";
+                            caption: "The pictures are the icons themselves, at the size your bar draws them.";
 
-                        SettingRow {
-                            title: "Battery notifications";
-                            with-switch: true;
-                            toggled <=> root.notifications-enabled;
-                            changed(v) => { root.notifications-toggled(v); }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                cross-axis-alignment: center;
+
+                                for option in root.tray-styles: StyleTile {
+                                    label: option.label;
+                                    preview: option.preview;
+                                    on: option.on;
+                                    picked => { root.tray-style-chosen(option.id); }
+                                }
+
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+
+                            Caption { text: root.tray-style-caption; }
+
+                            if root.tray-has-text: HorizontalLayout {
+                                spacing: 8px;
+                                cross-axis-alignment: center;
+
+                                for option in root.tray-colors: SwatchTile {
+                                    label: option.label;
+                                    swatch: option.swatch;
+                                    on: option.on;
+                                    picked => { root.tray-text-color-chosen(option.id); }
+                                }
+
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+
+                            if root.tray-has-text: Caption {
+                                text: "The numbers are the only coloured part of the tray icon — every other style is a white line drawing.";
+                            }
+
+                            RowSeparator { }
+
+                            Caption {
+                                text: "Some bars draw only the tray items they have pinned — these register as “embr” and “embr-<device>”.";
+                            }
                         }
 
-                        SettingRow {
-                            title: "Shared thresholds";
-                            value: root.thresholds-text;
+                        SettingsCard {
+                            title: "ONE ICON PER DEVICE";
+                            caption: "Nothing chosen means one icon, following the device with the least charge.";
+
+                            for choice in root.tray-choices: ChoiceRow {
+                                title: choice.name;
+                                caption: choice.caption;
+                                on: choice.on;
+                                fill: transparent;
+                                chosen(v) => { root.tray-device-toggled(choice.key, v); }
+                            }
+
+                            if root.tray-choices.length == 0: Caption {
+                                text: "No devices found yet. Each device gets a switch here as soon as one answers.";
+                            }
                         }
 
-                        Caption {
-                            text: "A device with a level of its own watches that instead — set it beside the device itself, on the Devices page.";
+                        SettingsCard {
+                            title: "NOTIFICATIONS";
+
+                            SettingRow {
+                                title: "Battery notifications";
+                                caption: "off until you ask for them";
+                                with-switch: true;
+                                fill: transparent;
+                                toggled <=> root.notifications-enabled;
+                                changed(v) => { root.notifications-toggled(v); }
+                            }
+
+                            RowSeparator { }
+
+                            SettingRow {
+                                title: "Shared thresholds";
+                                caption: "the levels every device without one of its own alerts at";
+                                value: root.thresholds-text;
+                                fill: transparent;
+                            }
+
+                            Caption {
+                                text: "A device with a level of its own watches that instead — set it beside the device itself, on the Devices page.";
+                            }
                         }
 
-                        SectionLabel { text: "WINDOW"; }
+                        SettingsCard {
+                            title: "REFRESHING";
 
-                        SettingRow {
-                            title: "Close to tray";
-                            with-switch: true;
-                            toggled <=> root.close-to-tray;
-                            changed(v) => { root.close-to-tray-toggled(v); }
+                            NumberRow {
+                                title: "Refresh interval";
+                                caption: "while the window is open";
+                                minimum: 5;
+                                maximum: 600;
+                                step: 5;
+                                fill: transparent;
+                                number <=> root.refresh-seconds;
+                                numbered(v) => { root.refresh-seconds-changed(v); }
+                            }
+
+                            RowSeparator { }
+
+                            SettingRow {
+                                title: "Notice a device going quiet";
+                                caption: "one short question per device, every five seconds, while the window is open";
+                                with-switch: true;
+                                fill: transparent;
+                                toggled <=> root.watch-devices;
+                                changed(v) => { root.watch-devices-toggled(v); }
+                            }
+
+                            Caption {
+                                text: "Closed, Embr slows to a read every two minutes and reads everything the moment the window comes back; Rescan reads now and waits longer for a device that has been asleep. The five-second watch is what notices a headset switched off behind its dongle — turn it off to leave the devices alone between refreshes.";
+                            }
                         }
 
-                        Caption {
-                            text: "Closing the window leaves Embr running: the devices are still read, and a low battery is still announced. Turn this off to quit instead.";
+                        SettingsCard {
+                            title: "WINDOW";
+
+                            SettingRow {
+                                title: "Close to tray";
+                                caption: "closing the window keeps Embr watching in the background";
+                                with-switch: true;
+                                fill: transparent;
+                                toggled <=> root.close-to-tray;
+                                changed(v) => { root.close-to-tray-toggled(v); }
+                            }
+
+                            Caption {
+                                text: "With this off, the close button quits. A low battery is still announced with nothing on screen, and the tray item is the way back.";
+                            }
+
+                            RowSeparator { }
+
+                            SettingRow {
+                                title: "Stop watching now";
+                                caption: "quits Embr and takes the tray item with it";
+                                button-text: "Quit Embr";
+                                fill: transparent;
+                                acted => { root.quit-requested(); }
+                            }
                         }
 
-                        SettingRow {
-                            title: "Stop watching now";
-                            value: "Quits Embr and takes the tray item with it";
-                            button-text: "Quit Embr";
-                            acted => { root.quit-requested(); }
+                        SettingsCard {
+                            title: "SETTINGS FILE";
+
+                            SettingRow {
+                                title: "Settings file";
+                                value: root.config-path;
+                                fill: transparent;
+                            }
+
+                            Caption {
+                                text: "Written as you change things here. The thresholds and the per-device levels live in it too, so it can be edited by hand while Embr runs.";
+                            }
+
+                            if root.notice != "": Caption {
+                                text: root.notice;
+                            }
                         }
-
-                        SectionLabel { text: "TRAY"; }
-
-                        SettingRow {
-                            title: "Tray icon shows the level";
-                            with-switch: true;
-                            toggled <=> root.tray-percent;
-                            changed(v) => { root.tray-percent-toggled(v); }
-                        }
-
-                        Caption {
-                            text: "Some bars draw only the tray items they have pinned, and these register as “embr” and “embr-<device>”: pin the ones you want to see. Closing the window is the fastest way to a tray-only app.";
-                        }
-
-                        for choice in root.tray-choices: ChoiceRow {
-                            title: choice.name;
-                            caption: choice.caption;
-                            on: choice.on;
-                            chosen(v) => { root.tray-device-toggled(choice.key, v); }
-                        }
-
-                        if root.tray-choices.length == 0: Caption {
-                            text: "No devices found yet. Each device gets a switch here as soon as one answers.";
-                        }
-
-                        SectionLabel { text: "APPLICATION"; }
-
-                        NumberRow {
-                            title: "Refresh interval";
-                            caption: "while the window is open";
-                            minimum: 5;
-                            maximum: 600;
-                            step: 5;
-                            number <=> root.refresh-seconds;
-                            numbered(v) => { root.refresh-seconds-changed(v); }
-                        }
-
-                        Caption {
-                            text: "With the window closed Embr slows down to a read every two minutes; it reads everything the moment the window comes back. Rescan reads now, and gives a device that has been asleep longer to answer.";
-                        }
-
-                        SettingRow {
-                            title: "Notice a device going quiet";
-                            with-switch: true;
-                            toggled <=> root.watch-devices;
-                            changed(v) => { root.watch-devices-toggled(v); }
-                        }
-
-                        Caption {
-                            text: "Asks every device one short question every five seconds, while this window is open, so a headset switched off shows up in seconds rather than at the next refresh. Turn it off to leave the devices alone between refreshes.";
-                        }
-
-                        SettingRow {
-                            title: "Settings file";
-                            value: root.config-path;
-                        }
-
-                        Caption {
-                            text: "Written as you change things here. The thresholds and the per-device levels live in it too, so it can be edited by hand while Embr runs.";
-                        }
-
-                        if root.notice != "": Caption {
-                            text: root.notice;
-                        }
-
-                        Rectangle { vertical-stretch: 1; background: transparent; }
+                    }
                     }
                 }
             }
         }
     }
-}
 
 /// The About view. The `AboutSlint` widget is required by the Slint licence and is shown
 /// here rather than buried, because this build really does use Slint under the hood.
