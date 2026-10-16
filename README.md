@@ -14,15 +14,16 @@ Embr shows what every attached Logitech mouse, keyboard and headset is doing —
 charge state and how it is connected — in a small window, a tray icon and optional desktop
 notifications.
 
-![Embr's window: three devices with battery levels, and the details card for the selected one](docs/screenshot.png)
+![Embr's window: a rail of devices with their battery levels, and the selected device's pages](docs/screenshot.png)
 
-*A device that has stopped answering says so, rather than showing a stale number.*
+*It uses the width it is given: the rail is the devices, and the page beside it is the subject.
+A device that has stopped answering says so, rather than showing a stale number.*
 
 ## How this was written
 
-**This project is written with AI.** Jensen — the name on the commits — sets the requirements,
-decides what Embr should do, and does the review and all testing on real hardware; the code, tests,
-comments and this file are written by an AI assistant.
+**This project is written with AI.** The person whose name is on the commits sets the
+requirements, decides what Embr should do, and does the review and all testing on real hardware;
+the code, tests, comments and this file are written by an AI assistant.
 
 So treat it as unreviewed work: no second pair of human eyes has been over it, and the comments
 and commit messages are claims rather than evidence.
@@ -56,6 +57,12 @@ Practically: read it before you run it, and report what breaks. HID++ has no rea
   seconds, and one that comes back does too, from the kernel — a HID device that came or went is
   announced by a uevent, which Embr hears and sweeps on at once. Nothing is polled to find out that
   nothing changed: between the short questions above, listening costs nothing.
+* **A level bar that says how it is going.** The bar beside a reading is filled in the colour of its
+  level — green when full, amber in the middle, red when low — in the rail and on a device's page
+  alike, and the tray icon's *level* colour is the same three bands. The percentage beside it keeps
+  the ordinary text colour, the bar says it once. A battery with no reading is an unfilled bar in the
+  theme's accent colour, and so is every bar when *Colour the level bars* is switched off in
+  Settings.
 * **Tray icon and notifications.** Five styles, chosen in Settings: a battery whose colour is the
   level, the same battery standing on end, the level itself as digits, a ring that fills as the
   charge rises, and *level and status* — a battery whose fill is the level, with a bolt while the
@@ -73,21 +80,61 @@ Practically: read it before you run it, and report what breaks. HID++ has no rea
   and the close button means what it says. There is a Quit button there too, for a machine whose
   panel does not draw the tray item.
 * **A settings page** for those levels, the tray icon, the close behaviour, the refresh interval
-  and the notification switch, saved to `~/.config/embr/config.toml`.
+  and the notification switch, and for what the readouts say: the desktop's colour scheme or one of
+  your own, whether the level bars are coloured, whether the voltage is shown beside a percentage,
+  and whether a percentage worked out from voltage is marked. Saved to `~/.config/embr/config.toml`,
+  which is ordinary text you can edit by hand — the page and the file never disagree, because the
+  page reads the file.
 
 ## Install
 
 ```bash
-# Debian / Ubuntu
-sudo apt install libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libdbus-1-dev
+# Debian / Ubuntu — to build it
+sudo apt install libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
 
 cargo build --release
 ./target/release/embr
 ```
 
-Needs Rust 1.85 or newer. On Fedora and Arch the packages are `fontconfig-devel`, `freetype2`,
-`libxkbcommon` and `dbus`. Embr draws its interface with the system font — Noto Sans, the family
-`sans-serif` resolves to on the major distributions — and ships no fonts of its own.
+Needs Rust 1.85 or newer. On Fedora and Arch the packages are `gtk4-devel` (or `gtk4`),
+`libadwaita`, `dbus` and `pkgconf`. GTK 4 and libadwaita are needed *at runtime* too — every
+desktop that ships a GNOME-derived shell already has them. Embr takes its font from the desktop,
+uses the desktop's colour scheme and accent, and ships no fonts and no theme of its own.
+
+### Installing it for one user
+
+No root needed and nothing left running. Every path below is one your desktop already looks at:
+
+```bash
+install -Dm755 target/release/embr ~/.local/bin/embr
+install -Dm644 assets/embr.svg ~/.local/share/icons/hicolor/scalable/apps/embr.svg
+
+# a panel that wants a PNG gets one
+for s in 16 24 32 48 64 128 256; do
+  install -d ~/.local/share/icons/hicolor/${s}x${s}/apps
+  rsvg-convert -w $s -h $s assets/embr.svg -o ~/.local/share/icons/hicolor/${s}x${s}/apps/embr.png
+done
+gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
+```
+
+and a desktop entry **named after the application id**, which is how a dock, a switcher and a
+launcher find the icon for a running window:
+
+```ini
+# ~/.local/share/applications/io.github.jensend6965.Embr.desktop
+[Desktop Entry]
+Type=Application
+Name=Embr
+Comment=Battery levels for Logitech devices
+Exec=embr
+Icon=embr
+Categories=Settings;HardwareSettings;
+```
+
+`update-desktop-database ~/.local/share/applications` afterwards. The name matters: a GTK
+application is matched to its entry by the id it was built with (`io.github.jensend6965.Embr`), so
+`embr.desktop` would leave the window with a blank tile — this is the one install detail that
+changed when the window moved from Slint to GTK.
 
 ## Device access
 
@@ -115,11 +162,29 @@ Without that rule Embr starts, finds no devices and shows an empty list.
 
 | | |
 | --- | --- |
-| [Slint](https://slint.dev) 1.18 | the window, the settings pane and the About dialog |
-| [`ksni`](https://crates.io/crates/ksni) | the tray icon, over D-Bus |
-| [`notify-rust`](https://crates.io/crates/notify-rust) | desktop notifications |
+| [GTK 4](https://gtk.org) + [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) | the window, in `crates/embr-app` |
+| [`ksni`](https://crates.io/crates/ksni) | the tray icon, over D-Bus (`crates/embr-desktop`) |
+| [`notify-rust`](https://crates.io/crates/notify-rust) | desktop notifications (`crates/embr-desktop`) |
 | [`serde`](https://crates.io/crates/serde) + [`toml`](https://crates.io/crates/toml) | reading and writing the config file |
 | [`libc`](https://crates.io/crates/libc) | talking to `/dev/hidraw*` |
+
+## How it is put together
+
+The window is **GTK 4 + libadwaita** (`gtk4-rs`). It was Slint until the port finished, and the
+measurements behind that move — what each toolkit costs and gives — are in
+`spikes/004-gtk4-gui/README.md`. Everything below the window is toolkit-free, and the crates are
+split along that line:
+
+| crate | binary | what it is |
+| --- | --- | --- |
+| `crates/embr-hidpp` | — | HID++ over `/dev/hidraw*`: discovery, batteries, feature sets. One dependency, `libc` |
+| `crates/embr-core` | — | the decisions: config, alert policy, cadence, and the view model the window draws |
+| `crates/embr-desktop` | — | the tray icons and the notifications — D-Bus, no window toolkit |
+| `crates/embr-app` | **`embr`** | the window: the device rail, the pages, the settings and the wiring |
+
+No crate below `embr-app` names a widget, and `embr-app` names no HID++ type: what it needs from the
+protocol crate is re-exported by `embr-core`, which is what keeps a future toolkit move confined to
+the top of the stack.
 
 ## Development
 
@@ -131,8 +196,9 @@ cargo clippy --workspace --all-targets    # keep this silent
 ## Roadmap
 
 * **Configuration** — DPI, RGB effects, host switching, then buttons.
-* **Packaging** — a `.desktop` entry, a systemd user unit and an install script, so this stops
-  being a `cargo build` away.
+* **Packaging** — the desktop entry, icon and udev rule are documented in `Install` above and
+  installed by hand; a package, a systemd user unit and an install script would make that one step
+  rather than five.
 * **A background daemon**, so notifications keep working with the window closed.
 * **Translations**, and a voltage curve measured from our own devices rather than the one noted
   below.
@@ -141,10 +207,8 @@ cargo clippy --workspace --all-targets    # keep this silent
 
 **MIT OR Apache-2.0**, at your option — see `LICENSE-MIT` and `LICENSE-APACHE`.
 
-Two things worth knowing:
+One thing worth knowing:
 
-* **Slint** is used under its Royalty-free licence, which requires the `AboutSlint` widget to be
-  reachable from an About dialog. Embr's About dialog has it; please keep it there.
 * **One value is derived from Solaar** (GPL-2.0-or-later): the voltage-to-percentage anchors in
   `crates/embr-hidpp/src/battery.rs`, reproduced so that a percentage inferred from voltage agrees
   with what `solaar show` prints at the same millivolts. It is stated in the code and here rather

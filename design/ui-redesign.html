@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Embr — a UI that grows (redesign proposal)</title>
+<style>
+  :root {
+    --page: #0c0d10;
+    --panel: #14161a;
+    --panel2: #1a1c21;
+    --line: #262a31;
+    --ink: #e9eaec;
+    --ink2: #a2a8b1;
+    --ink3: #6f7680;
+    --ok: #6fdc9d;
+    --warn: #f4c150;
+    --vio: #bd93f9;
+    --mono: "Maple Mono NF", ui-monospace, "JetBrains Mono", monospace;
+    --sans: "Noto Sans", "Inter", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 26px 26px 60px;
+    background: var(--page); color: var(--ink);
+    font-family: var(--sans); font-size: 13px; line-height: 1.55;
+    max-width: 1300px;
+  }
+  h1 { font-size: 21px; margin: 0 0 6px; letter-spacing: -.2px; }
+  h2 { font-size: 14px; margin: 34px 0 4px; letter-spacing: .3px; text-transform: uppercase; color: var(--ink); }
+  h2 span.n { color: var(--vio); font-variant-numeric: tabular-nums; }
+  h3 { font-size: 13px; margin: 18px 0 6px; color: var(--ink); }
+  p.lead { color: var(--ink2); margin: 0 0 4px; max-width: 1060px; }
+  p, li { color: var(--ink2); }
+  ul, ol { margin: 8px 0 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  b, strong { color: var(--ink); font-weight: 600; }
+  code { font-family: var(--mono); font-size: 11.5px; color: #d6bffb; background: #1b1726; padding: 1px 5px; border-radius: 5px; }
+  .grid { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+  .col { flex: 0 0 auto; }
+  figure { margin: 12px 0 0; }
+  figcaption { color: var(--ink3); font-size: 11.5px; margin-top: 7px; max-width: 1240px; }
+  .tag { display: inline-block; font-size: 10px; letter-spacing: .6px; text-transform: uppercase;
+         color: var(--ink3); border: 1px solid var(--line); border-radius: 20px; padding: 1px 8px; margin-left: 8px; }
+  .tag.plan { color: var(--warn); border-color: #4a3d1c; }
+  .tag.now  { color: var(--ok); border-color: #24402f; }
+
+  /* ---------- the app mockups: tokens are the app's own ---------- */
+  .app {
+    --bg: #15161a; --surface: #1c1e23; --raised: #23262c; --track: #303439;
+    --border: #2b2f36; --text: #e7e9ec; --text2: #9ba1a9; --text3: #6c737c;
+    --accent: #bd93f9; --green: #3ddc97; --amber: #f4c150; --red: #f2726f; --blue: #6aa8ff;
+    background: var(--bg); color: var(--text);
+    font-size: 11px; line-height: 1.4; overflow: hidden;
+    border-radius: 10px; border: 1px solid var(--line);
+    display: flex; flex-direction: column;
+  }
+  .app[data-scheme="light"] {
+    --bg: #f3f4f7; --surface: #ffffff; --raised: #eef0f4; --track: #dcdfe5;
+    --border: #e0e3e9; --text: #1a1c20; --text2: #4e555e; --text3: #7b828c;
+  }
+  .app[data-accent="blue"] { --accent: #3584e4; }
+  .app[data-accent="green"] { --accent: #33d17a; }
+  .app .tt { height: 40px; flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+             padding: 0 13px; border-bottom: 1px solid var(--border); }
+  .app .flame { width: 15px; height: 15px; border-radius: 4px; background: linear-gradient(150deg, #ffaf32, #ff5a1f); }
+  .app .word { font-weight: 700; font-size: 13px; letter-spacing: -.1px; }
+  .app .sp { flex: 1; }
+  .app .btn { height: 21px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--border);
+              background: var(--raised); color: var(--text2); display: flex; align-items: center; font-size: 10.5px; }
+  .app .btn.primary { background: var(--accent); border-color: var(--accent); color: #14161a; font-weight: 600; }
+  .app .body { flex: 1; display: flex; min-height: 0; }
+
+  /* rail */
+  .rail { border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 10px 10px 8px; gap: 7px; }
+  .rail .head { display: flex; align-items: center; color: var(--text3); font-size: 9px; letter-spacing: .7px; font-weight: 700; }
+  .rail .head .sp { flex: 1; }
+  .dev { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); padding: 7px 8px; }
+  .dev.sel { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+  .dev .r1 { display: flex; align-items: center; gap: 7px; }
+  .glyph { width: 20px; height: 20px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+           background: color-mix(in srgb, var(--accent) 16%, transparent); flex: 0 0 auto; }
+  .dev .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chip { font-size: 9px; padding: 1px 5px; border-radius: 20px; border: 1px solid var(--border); color: var(--text3); }
+  .chip.ls { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 45%, transparent); }
+  .chip.bolt { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+  .bar { height: 4px; border-radius: 3px; background: var(--track); overflow: hidden; margin: 5px 0 3px; }
+  .bar i { display: block; height: 100%; background: var(--green); }
+  .bar i.amber { background: var(--amber); }
+  .bar i.red { background: var(--red); }
+  .dev .r2 { display: flex; gap: 6px; color: var(--text3); font-size: 9.5px; }
+  .dot { width: 5px; height: 5px; border-radius: 3px; background: var(--green); margin-top: 4px; }
+  .dot.amber { background: var(--amber); } .dot.grey { background: var(--text3); }
+  /* the feature list of the selected device */
+  .feats { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+  .feat { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 6px; color: var(--text2); }
+  .feat.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); font-weight: 600; }
+  .feat .ic { width: 13px; height: 13px; border-radius: 4px; border: 1px solid var(--text3); flex: 0 0 auto; }
+  .feat.on .ic { border-color: var(--accent); }
+  .feat .soon { margin-left: auto; font-size: 9px; color: var(--text3); }
+  /* chips instead of a column, for the narrow window */
+  .chiprow { display: flex; gap: 5px; flex-wrap: wrap; }
+  .chipbig { padding: 3px 9px; border-radius: 20px; border: 1px solid var(--border); color: var(--text2); background: var(--surface); }
+  .chipbig.on { background: color-mix(in srgb, var(--accent) 20%, transparent);
+                border-color: var(--accent); color: var(--text); font-weight: 600; }
+
+  /* page */
+  .page { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .phead { display: flex; align-items: center; gap: 9px; padding: 11px 14px 10px; border-bottom: 1px solid var(--border); }
+  .phead .big { width: 30px; height: 30px; border-radius: 9px; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+                background: color-mix(in srgb, var(--accent) 14%, transparent); flex: 0 0 auto; }
+  .phead h4 { margin: 0; font-size: 14px; font-weight: 650; }
+  .phead .sub { color: var(--text3); font-size: 10px; }
+  .badge { margin-left: auto; font-size: 9.5px; padding: 2px 8px; border-radius: 20px; color: var(--blue);
+           background: color-mix(in srgb, var(--blue) 14%, transparent); border: 1px solid color-mix(in srgb, var(--blue) 35%, transparent); }
+  .cards { padding: 12px 14px; display: flex; flex-direction: column; gap: 11px; overflow: hidden; }
+  .card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+  .card > .ch { display: flex; align-items: stretch; gap: 0; }
+  .card .ct { padding: 9px 12px 0; }
+  .card .ctitle { font-size: 9.5px; letter-spacing: .7px; font-weight: 700; color: var(--text2); }
+  .card .ccap { color: var(--text3); font-size: 9.5px; padding: 2px 12px 0; max-width: 640px; }
+  .card .rows { padding: 7px 12px 10px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: 0; }
+  .row .lab { width: 150px; flex: 0 0 auto; }
+  .row .lab b { display: block; font-weight: 600; color: var(--text); }
+  .row .lab span { color: var(--text3); font-size: 9.5px; }
+  .row .mid { flex: 1; min-width: 90px; display: flex; align-items: center; gap: 9px; }
+  .row .ctl { flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .slider { position: relative; flex: 1; height: 4px; border-radius: 3px; background: var(--track); }
+  .slider i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--accent); }
+  .slider u { position: absolute; top: -4px; width: 12px; height: 12px; border-radius: 6px; background: var(--text);
+              border: 2px solid var(--bg); }
+  .val { font-family: var(--mono); font-size: 10.5px; color: var(--text); min-width: 58px; text-align: right; }
+  .sw { width: 28px; height: 15px; border-radius: 9px; background: var(--accent); position: relative; flex: 0 0 auto; }
+  .sw u { position: absolute; top: 1.5px; left: 14.5px; width: 12px; height: 12px; border-radius: 6px; background: #fff; }
+  .sw.off { background: var(--track); } .sw.off u { left: 1.5px; }
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg span { padding: 3px 9px; color: var(--text2); background: var(--raised); border-right: 1px solid var(--border); }
+  .seg span:last-child { border-right: 0; }
+  .seg span.on { background: var(--accent); color: #14161a; font-weight: 600; }
+  .tiles { display: flex; gap: 9px; }
+  .tile { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; background: var(--raised); }
+  .tile .tl { font-size: 9px; letter-spacing: .6px; color: var(--text3); font-weight: 700; }
+  .tile .tv { font-size: 15px; font-weight: 650; margin-top: 1px; }
+  .swatch { width: 16px; height: 16px; border-radius: 5px; border: 1px solid var(--border); }
+  .foot { display: flex; align-items: center; gap: 8px; padding: 0 12px 10px; color: var(--text3); font-size: 9.5px; }
+  .foot .sp { flex: 1; }
+  .mini { font-size: 9px; color: var(--text3); }
+
+  /* annotations */
+  .anno { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 8px;
+          background: var(--vio); color: #14161a; font-size: 9.5px; font-weight: 700; }
+  .legend { margin: 10px 0 0; padding: 0; list-style: none; }
+  .legend li { display: flex; gap: 8px; margin: 4px 0; }
+  .legend .anno { flex: 0 0 auto; margin-top: 2px; }
+
+  table { border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 14px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--ink3); font-weight: 600; font-size: 10.5px; letter-spacing: .5px; text-transform: uppercase; }
+  .swatchdemo { display: inline-block; width: 12px; height: 12px; border-radius: 4px; vertical-align: -2px; margin-right: 5px; border: 1px solid #0003; }
+  .foot-note { color: var(--ink3); font-size: 11.5px; margin-top: 10px; }
+  .scale { width: 1024px; overflow: hidden; border-radius: 10px; border: 1px solid var(--line); }
+  .scale > .in { width: 2560px; transform: scale(.4); transform-origin: top left; }
+</style>
+</head>
+<body>
+
+>
+
+<h1>Embr — a UI that grows</h1>
+
+<p class="lead"><span class="tag now">settled</span> The window is <b>GTK 4 + libadwaita</b>, and this
+redesign is what it now implements: the rail with each device's own feature list, the pages beside it,
+and a Settings dialog. The toolkit comparison further down is kept as the record of that decision, not
+as a recommendation — <code>spikes/004-gtk4-gui</code> has the measurements, <code>crates/embr-app</code>
+is the result.</p>
+<p class="lead">A proposal for the shape of the window once the app is not only a battery monitor: DPI, lighting,
+report rate, buttons, profiles. Plus what “follow the system theme” can honestly mean, measured on your desktop.</p>
+
+<!-- ============================================================ 1 -->
+<h2><span class="n">1</span> · Why today's shape stops working</h2>
+<div class="grid">
+  <div class="col">
+    <figure>
+      <div class="app" data-scheme="dark" style="width: 1000px; height: 250px;">
+        <div class="tt">
+          <div class="flame"></div><div class="word">Embr</div>
+          <div class="sp"></div>
+          <div class="btn primary">Devices</div><div class="btn">Settings</div><div class="btn">Rescan</div>
+          <div class="btn">About</div><span class="anno">2</span>
+        </div>
+        <div class="body">
+          <div class="rail" style="width: 300px;">
+            <div class="head">DEVICES <div class="sp"></div> 4s ago</div>
+            <div class="dev sel">
+              <div class="r1"><div class="glyph"></div><div class="nm">G703 LS</div><div class="chip ls">LS</div><div class="mini">~56%</div></div>
+              <div class="bar"><i class="amber" style="width:56%"></i></div>
+              <div class="r2"><span class="dot amber"></span>Discharging · Mouse · 10s ago</div>
+            </div>
+            <div class="dev">
+              <div class="r1"><div class="glyph"></div><div class="nm">G913 TKL</div><div class="chip bolt">Bolt</div><div class="mini">~86%</div></div>
+              <div class="bar"><i style="width:86%"></i></div>
+              <div class="r2"><span class="dot amber"></span>Discharging · Keyboard · 10s ago</div>
+            </div>
+          </div>
+          <div class="page">
+            <div class="phead">
+              <div class="big"></div>
+              <div><h4>G703 LS</h4><div class="sub">Mouse</div></div>
+              <div class="badge">Lightspeed (C539, slot 1)</div>
+            </div>
+            <div class="cards">
+              <div class="card"><div class="ct"><div class="ctitle">BATTERY</div></div>
+                <div class="rows">
+                  <div class="tiles"><div class="tile"><div class="tl">BATTERY</div><div class="tv" style="color:var(--amber)">~56%</div></div>
+                  <div class="tile"><div class="tl">VOLTAGE</div><div class="tv">3839 mV</div></div>
+                  <div class="tile"><div class="tl">UPDATED</div><div class="tv">10s ago</div></div></div>
+                </div>
+              </div>
+              <div class="card" style="border-style:dashed;">
+                <div class="ct"><div class="ctitle">… AND EVERY SUBJECT THAT COMES NEXT, IN THE SAME COLUMN <span class="anno">1</span></div></div>
+                <div class="rows"><div class="mini">DPI · lighting zones · report rate · buttons · profiles · firmware — a row per control,
+                  each written by hand into one 1 557-line <code>app.slint</code>, all of it scrolled past to reach the last one.</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>Today: two flat pages (<b>Devices</b>, <b>Settings</b>) and one card that holds every subject of the
+        selected device. Shown at 1000 px; the rail stops at 470 px however wide the window gets.</figcaption>
+    </figure>
+  </div>
+  <div class="col" style="width: 250px;">
+    <ul class="legend">
+      <li><span class="anno">1</span><span>One column holds every subject: battery, then DPI, then lighting, then buttons.
+        At six subjects the card is a 2500 px scroll and “where am I” is a scroll position, not a place.</span></li>
+      <li><span class="anno">2</span><span>The two pages are <b>scopes</b> — the app, the device. A per-device feature is
+        neither, so it has nowhere to live but inside that one card.</span></li>
+      <li><span class="anno">3</span><span>The rail is capped at 470 px, so a device name elides while the space beside it
+        goes to a card that may be half empty.</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ 2 -->
+<h2><span class="n">2</span> · Proposal: device rail with its features, plus a feature page</h2>
+<figure>
+  <div class="app" data-scheme="dark" style="width: 1240px; height: 560px;">
+    <div class="tt">
+      <div class="flame"></div><div class="word">Embr</div>
+      <div class="sp"></div>
+      <div class="chip" style="margin-right:2px">3 devices · lowest ~56%</div>
+      <div class="btn">Rescan</div><div class="btn">About</div><div class="btn" style="font-size:13px">⚙</div>
+    </div>
+    <div class="body">
+      <!-- rail -->
+      <div class="rail" style="width: 380px;">
+        <div class="head">DEVICES<div class="sp"></div>4s ago</div>
+        <div class="dev sel">
+          <div class="r1"><div class="glyph"></div><div class="nm">G703 LS</div><div class="chip ls">LS</div><div class="mini">~56%</div></div>
+          <div class="bar"><i class="amber" style="width:56%"></i></div>
+          <div class="r2"><span class="dot amber"></span>Discharging · 10s ago</div>
+          <div class="feats">
+            <div class="feat"><span class="ic"></span>Battery<span class="soon">alert 20%</span></div>
+            <div class="feat on"><span class="ic"></span>DPI &amp; sensitivity</div>
+            <div class="feat"><span class="ic"></span>Lighting</div>
+            <div class="feat"><span class="ic"></span>Buttons</div>
+            <div class="feat"><span class="ic"></span>Profiles</div>
+            <div class="feat"><span class="ic"></span>Device</div>
+          </div>
+        </div>
+        <div class="dev">
+          <div class="r1"><div class="glyph"></div><div class="nm">G913 TKL</div><div class="chip bolt">Bolt</div><div class="mini">~86%</div></div>
+          <div class="bar"><i style="width:86%"></i></div>
+          <div class="r2"><span class="dot amber"></span>Discharging · 10s ago</div>
+        </div>
+        <div class="dev">
+          <div class="r1"><div class="glyph"></div><div class="nm">G733 Headset</div><div class="chip">USB</div><div class="mini">—</div></div>
+          <div class="bar"><i style="width:0"></i></div>
+          <div class="r2"><span class="dot grey"></span>Not answering · 4s ago</div>
+        </div>
+      </div>
+      <!-- feature page -->
+      <div class="page">
+        <div class="phead">
+          <div class="big"></div>
+          <div><h4>G703 LS — DPI &amp; sensitivity</h4><div class="sub">read 10s ago · the last change was written to the device</div></div>
+          <div class="badge">Lightspeed (C539, slot 1)</div>
+        </div>
+        <div class="cards">
+          <div class="card">
+            <div class="ct"><div class="ctitle">SENSITIVITY</div></div>
+            <div class="ccap">Four slots, the shape G HUB uses: a slider each, and which one the button cycle steps through.</div>
+            <div class="rows">
+              <div class="row"><div class="lab"><b>Slot 1</b><span>800 dpi</span></div>
+                <div class="mid"><div class="slider"><i style="width:22%"></i><u style="left:22%"></u></div></div>
+                <div class="ctl"><span class="val">800</span><div class="sw"><u></u></div></div></div>
+              <div class="row"><div class="lab"><b>Slot 2</b><span>1600 dpi</span></div>
+                <div class="mid"><div class="slider"><i style="width:44%"></i><u style="left:44%"></u></div></div>
+                <div class="ctl"><span class="val">1600</span><div class="sw"><u></u></div></div></div>
+              <div class="row"><div class="lab"><b>Slot 3</b><span>3200 dpi</span></div>
+                <div class="mid"><div class="slider"><i style="width:71%"></i><u style="left:71%"></u></div></div>
+                <div class="ctl"><span class="val">3200</span><div class="sw"><u></u></div></div></div>
+              <div class="row"><div class="lab"><b>Slot 4</b><span>not used</span></div>
+                <div class="mid"><div class="slider"><i style="width:0%"></i><u style="left:0%"></u></div></div>
+                <div class="ctl"><span class="val">—</span><div class="sw off"><u></u></div></div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="ct"><div class="ctitle">POINTER</div></div>
+            <div class="rows">
+              <div class="row"><div class="lab"><b>Report rate</b><span>how often the mouse reports</span></div>
+                <div class="mid"><div class="seg"><span>125</span><span>250</span><span>500</span><span class="on">1000 Hz</span></div></div>
+                <div class="ctl"><span class="mini">device default</span></div></div>
+              <div class="row"><div class="lab"><b>Pointer speed</b><span>applies to the host, not the device</span></div>
+                <div class="mid"><div class="slider"><i style="width:50%"></i><u style="left:50%"></u></div></div>
+                <div class="ctl"><span class="val">± 0</span></div></div>
+            </div>
+            <div class="foot"><span>Written to the device as you move it · <b>Reset to the profile</b></span>
+              <div class="sp"></div><div class="btn">Reset</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>1240 px window.</b> The rail keeps the device rows it has today (<span class="anno">3</span> the
+    low-battery signal stays the app's front page) and the selected device opens <i>its own</i> feature list
+    underneath — the second level of navigation that has nowhere to live in a two-page shell. The page on the
+    right is one feature, scrolling its own cards.</figcaption>
+</figure>
+
+<h3>What changed, in one line each</h3>
+<ol>
+  <li><b>Navigation gains a level:</b> device → feature. The rail is the devices, the page is the subject.</li>
+  <li><b>App settings move behind the gear</b> and take the whole body, because they are a different scope —
+     not a sibling of “Devices”. <code>Rescan</code> is what changes with a sweep, so it stays and keeps
+     saying <code>Rescanning…</code>.</li>
+  <li><b>A page is cards</b>, and a card is one subject with its rows: the existing <code>SettingsCard</code> /
+     <code>SettingRow</code> / <code>ChoiceRow</code> / <code>NumberRow</code> become the shared vocabulary of
+     both scopes, so a feature page is a new page, not a new dialect.</li>
+  <li><b>New control kinds, one component each:</b> <code>SliderRow</code> (DPI, brightness, pointer speed),
+     <code>ColorRow</code> (a swatch and a picker), <code>SlotList</code> (the DPI slots), <code>SegRow</code>
+     (report rate, lighting mode), and later <code>KeyMap</code>. Each one needs a value type in
+     <code>embr-core</code> and stays dumb in the window — the app draws, core decides.</li>
+  <li><b>Battery is a feature like the others</b> (first in the list, and the rail still shows the level of every
+     device), so nothing about the app's reason to exist gets demoted to a tab.</li>
+</ol>
+
+<figure>
+  <div class="app" data-scheme="dark" style="width: 760px; height: 420px;">
+    <div class="tt"><div class="flame"></div><div class="word">Embr</div><div class="sp"></div>
+      <div class="btn">Rescan</div><div class="btn" style="font-size:13px">⚙</div></div>
+    <div class="body">
+      <div class="rail" style="width: 210px;">
+        <div class="head">DEVICES<div class="sp"></div>4s</div>
+        <div class="dev sel">
+          <div class="r1"><div class="glyph"></div><div class="nm">G913 TKL</div><div class="mini">~86%</div></div>
+          <div class="bar"><i style="width:86%"></i></div>
+          <div class="r2"><span class="dot amber"></span>Bolt · 10s ago</div>
+        </div>
+        <div class="dev">
+          <div class="r1"><div class="glyph"></div><div class="nm">G703 LS</div><div class="mini">~56%</div></div>
+          <div class="bar"><i class="amber" style="width:56%"></i></div>
+          <div class="r2"><span class="dot amber"></span>LS · 10s ago</div>
+        </div>
+      </div>
+      <div class="page">
+        <div class="phead" style="flex-wrap:wrap; padding-bottom:9px;">
+          <div class="big"></div>
+          <div><h4>G913 TKL — Lighting</h4><div class="sub">read 10s ago</div></div>
+        </div>
+        <div class="cards" style="gap:9px;">
+          <div class="chiprow">
+            <span class="chipbig">Battery</span><span class="chipbig on">Lighting</span><span class="chipbig">Keys</span>
+            <span class="chipbig">Profiles</span><span class="chipbig">Host</span><span class="chipbig">Device</span>
+          </div>
+          <div class="card">
+            <div class="ct"><div class="ctitle">EFFECT</div></div>
+            <div class="rows">
+              <div class="row"><div class="lab"><b>Mode</b></div>
+                <div class="mid"><div class="seg"><span>Off</span><span class="on">Fixed</span><span>Cycle</span><span>Breathing</span></div></div></div>
+              <div class="row"><div class="lab"><b>Colour</b><span>all zones</span></div>
+                <div class="mid"><div class="swatch" style="background:#bd93f9"></div><span class="val">#BD93F9</span></div>
+                <div class="ctl"><div class="btn">All zones…</div></div></div>
+              <div class="row"><div class="lab"><b>Brightness</b></div>
+                <div class="mid"><div class="slider"><i style="width:80%"></i><u style="left:80%"></u></div></div>
+                <div class="ctl"><span class="val">80%</span></div></div>
+            </div>
+            <div class="foot"><span>Preview</span>
+              <div style="flex:1;height:16px;border-radius:5px;border:1px solid var(--border);
+                          background:linear-gradient(90deg,#bd93f9,#8f5ef0 45%,#bd93f9)"></div>
+              <div class="btn">Write to device</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>760 px — the narrowest this is honest at.</b> Below the width where a rail and a page can share
+    the window, the feature list turns into a chip row above the page instead of disappearing: the second level of
+    navigation has to survive the narrow case, or the design only works maximised.</figcaption>
+</figure>
+
+<figure>
+  <div class="scale">
+    <div class="in">
+      <div class="app" data-scheme="dark" style="width: 2560px; height: 700px; border:0; border-radius:0;">
+        <div class="tt" style="height:66px; padding:0 24px; gap:14px;">
+          <div class="flame" style="width:22px;height:22px"></div><div class="word" style="font-size:20px">Embr</div>
+          <div class="sp"></div><div class="btn" style="width:116px;justify-content:center">Rescan</div>
+          <div class="btn" style="width:84px;justify-content:center">About</div><div class="btn" style="font-size:20px">⚙</div>
+        </div>
+        <div class="body">
+          <div class="rail" style="width: 470px; padding:18px 16px;">
+            <div class="head" style="font-size:11px">DEVICES<div class="sp"></div>4s ago</div>
+            <div class="dev" style="padding:12px">
+              <div class="r1"><div class="glyph" style="width:30px;height:30px"></div>
+                <div class="nm" style="font-size:14px">G703 LS</div><div class="chip ls">LS</div>
+                <div class="mini" style="font-size:12px">~56%</div></div>
+              <div class="bar" style="height:6px"><i class="amber" style="width:56%"></i></div>
+              <div class="r2" style="font-size:11px"><span class="dot amber"></span>Discharging · 10s ago</div>
+              <div class="feats" style="gap:8px">
+                <div class="feat" style="font-size:12px;padding:8px"><span class="ic"></span>Battery</div>
+                <div class="feat on" style="font-size:12px;padding:8px"><span class="ic"></span>DPI &amp; sensitivity</div>
+                <div class="feat" style="font-size:12px;padding:8px"><span class="ic"></span>Lighting</div>
+                <div class="feat" style="font-size:12px;padding:8px"><span class="ic"></span>Buttons</div>
+                <div class="feat" style="font-size:12px;padding:8px"><span class="ic"></span>Profiles</div>
+                <div class="feat" style="font-size:12px;padding:8px"><span class="ic"></span>Device</div>
+              </div>
+            </div>
+            <div class="dev" style="padding:12px">
+              <div class="r1"><div class="glyph" style="width:30px;height:30px"></div>
+                <div class="nm" style="font-size:14px">G913 TKL</div><div class="mini" style="font-size:12px">~86%</div></div>
+              <div class="bar" style="height:6px"><i style="width:86%"></i></div>
+              <div class="r2" style="font-size:11px"><span class="dot amber"></span>Bolt · 10s ago</div>
+            </div>
+          </div>
+          <div class="page">
+            <div class="phead" style="padding:20px 26px 18px; gap:16px">
+              <div class="big" style="width:46px;height:46px"></div>
+              <div><h4 style="font-size:16px">G703 LS — Battery</h4>
+                <div class="sub" style="font-size:12px">read 10s ago · lowest of 3 devices</div></div>
+              <div class="badge" style="font-size:12px;padding:3px 12px">Lightspeed (C539, slot 1)</div>
+            </div>
+            <div class="cards" style="padding:22px 26px; gap:18px">
+              <div class="card" style="border-radius:14px">
+                <div class="ct" style="padding:20px 22px 0"><div class="ctitle" style="font-size:11px">BATTERY</div></div>
+                <div class="rows" style="padding:14px 22px 20px">
+                  <div class="tiles" style="gap:16px">
+                    <div class="tile" style="padding:14px 18px"><div class="tl" style="font-size:11px">BATTERY</div>
+                      <div class="tv" style="font-size:26px;color:var(--amber)">~56%</div></div>
+                    <div class="tile" style="padding:14px 18px"><div class="tl" style="font-size:11px">VOLTAGE</div>
+                      <div class="tv" style="font-size:26px">3839 mV</div></div>
+                    <div class="tile" style="padding:14px 18px"><div class="tl" style="font-size:11px">UPDATED</div>
+                      <div class="tv" style="font-size:26px">10s ago</div></div>
+                  </div>
+                  <div class="bar" style="height:8px;margin-top:16px"><i class="amber" style="width:56%"></i></div>
+                  <div class="row" style="padding:12px 0"><div class="lab" style="width:220px;font-size:13px"><b>Status</b></div>
+                    <div class="mid" style="font-size:13px">Discharging</div></div>
+                  <div class="row" style="padding:12px 0"><div class="lab" style="width:220px;font-size:13px"><b>Low battery alert</b>
+                      <span style="font-size:11px">shared: 20% / 10%</span></div>
+                    <div class="ctl"><span class="val">20</span><div class="seg"><span>▴</span><span>▾</span></div><div class="btn">Default</div></div></div>
+                </div>
+              </div>
+              <div class="card" style="border-radius:14px">
+                <div class="ct" style="padding:18px 22px 0"><div class="ctitle" style="font-size:11px">DEVICE</div></div>
+                <div class="rows" style="padding:12px 22px 18px">
+                  <div class="row" style="padding:11px 0"><div class="lab" style="width:220px;font-size:13px"><b>Name</b></div>
+                    <div class="mid" style="font-size:13px">G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO</div>
+                    <div class="ctl"><div class="btn">Rename</div></div></div>
+                  <div class="row" style="padding:11px 0"><div class="lab" style="width:220px;font-size:13px"><b>Firmware</b></div>
+                    <div class="mid" style="font-size:13px">MPM 15.02 · receiver C539</div></div>
+                  <div class="row" style="padding:11px 0"><div class="lab" style="width:220px;font-size:13px"><b>Host</b>
+                      <span style="font-size:11px">change host — 1814</span></div>
+                    <div class="ctl"><div class="seg"><span class="on">this host</span><span>other</span></div></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>2560 px, shown at 40 %.</b> The rail stops at 470 px and the page takes the rest — the rule the
+    window already claims in its README, and the one it quietly broke until today. Cards stretch with it; a
+    caption is the only thing that stops short.</figcaption>
+</figure>
+
+<!-- ============================================================ 3 -->
+<h2><span class="n">3</span> · The feature list comes from the device, not from the code</h2>
+<p class="lead">This is the part that makes the shell worth having: <code>core</code> already knows what each device
+answered, so it can also own the list of what the device <i>advertises</i> — HID++ <code>FEATURE SET {0001}</code>,
+which <code>embr-hidpp</code> reads today. The window draws the list it is handed and nothing else.</p>
+<table>
+  <tr><th>Device</th><th>Advertised, read from the hardware just now</th><th>Feature list in the rail</th></tr>
+  <tr>
+    <td><b>G703 LS</b><br><span class="mini">mouse · Lightspeed C539 slot 1 · ~56 %</span></td>
+    <td><code>1001</code> battery voltage · <code>2201</code> adjustable DPI · <code>8060</code> report rate ·
+        <code>8071</code> RGB effects · <code>8110</code> colour LED effects · <code>8100</code> onboard profiles ·
+        <code>1814</code> change host</td>
+    <td>Battery · DPI &amp; sensitivity · Lighting · Buttons · Profiles · Device</td>
+  </tr>
+  <tr>
+    <td><b>G913 TKL</b><br><span class="mini">keyboard · Bolt C547 slot 1 · ~86 %</span></td>
+    <td><code>1001</code> battery voltage · <code>8071</code> RGB effects · <code>1B04</code> special keys ·
+        <code>8100</code> onboard profiles · <code>1814</code> change host</td>
+    <td>Battery · Lighting · Keys · Profiles · Host · Device <span class="mini">(no DPI — it is a keyboard, and the
+        list says so by itself)</span></td>
+  </tr>
+  <tr>
+    <td><b>G733</b><br><span class="mini">headset · USB · not answering</span></td>
+    <td>battery through <code>ADC {1F20}</code> when it is on; today it answers nothing (<i>Not answering</i>)</td>
+    <td>Battery · Device <span class="mini">— and the rail says <i>Not answering</i> instead of inventing a level</span></td>
+  </tr>
+</table>
+<p class="foot-note">Adding the sixth feature changes nothing about the shell: one entry in the capability list
+(core), one card in the .slint. Your own roadmap order — DPI, RGB, host switching, buttons — maps onto pages, not
+onto a redesign each time.</p>
+
+<!-- ============================================================ 4 -->
+<h2><span class="n">4</span> · “Follow the system theme” — what it can honestly mean</h2>
+<p class="lead">Embr is <b>not a GTK 4 app</b>: there is no GTK anywhere in the tree (<code>grep -ri gtk
+Cargo.toml Cargo.lock crates/</code> finds nothing) — the window is Slint 1.18, drawing its own controls from
+<code>Tokens</code> in <code>app.slint</code>, with <code>Palette.color-scheme</code> forced to dark at line 989.
+So a GTK theme cannot be inherited the way a GTK app inherits one. What the desktop <i>does</i> publish, and what
+we can read instead, is this — measured on your machine a minute ago through the same portal GTK asks:</p>
+<table>
+  <tr><th>Source</th><th>Value here</th><th>What we do with it</th></tr>
+  <tr><td>portal <code>org.freedesktop.appearance</code> → <code>color-scheme</code></td>
+      <td><code>1</code> — dark</td><td>Chooses the dark or light half of the tokens, and sets Slint's own
+      <code>Palette.color-scheme</code> so the stock widgets (Button, Switch, SpinBox, ScrollView) follow too.</td></tr>
+  <tr><td>portal → <code>accent-color</code></td>
+      <td><span class="swatchdemo" style="background:#bd93f9"></span><code>#BD93F9</code> — your Dracula purple,
+      the same value KWin is drawing your window border with</td>
+      <td>Becomes <code>Tokens.accent</code>: the primary button, the switches, the selected feature, the focus
+      rings. Today that token is a hardcoded <code>#5aa9f7</code> blue that is not your desktop at all.</td></tr>
+  <tr><td>portal <code>SettingChanged</code> signal</td><td>fires on a scheme/accent change</td>
+      <td>A watcher thread re-reads and pushes the new palette in — the same pattern as the device thread; no
+      restart to follow a KDE/GNOME scheme switch.</td></tr>
+  <tr><td><code>~/.config/gtk-4.0/settings.ini</code> · <code>gsettings</code></td>
+      <td><code>gtk-theme-name=adw-gtk3-dark</code>, <code>gtk-font-name=Maple Mono NF 12</code>,
+          <code>prefer-dark</code></td>
+      <td>The fallback chain for desktops without a portal (scheme and font). <b>Your call:</b> adopting
+      <code>gtk-font-name</code> would render Embr in Maple Mono NF 12 — a monospace UI. I would keep Noto Sans
+      and say why, unless you want the mono look.</td></tr>
+  <tr><td>The GTK theme's own widget drawing (<code>gtk.css</code>, Adwaita shading, headerbars)</td>
+      <td>not readable as data</td><td>Out of reach while Slint draws the controls. Matching it means either
+      re-styling the widgets we own (a real, bounded cost) or the rewrite below.</td></tr>
+</table>
+
+<div class="grid" style="margin-top:16px">
+  <div class="col">
+    <figure style="margin-top:0">
+      <div class="app" data-scheme="dark" style="width:520px;height:250px">
+        <div class="tt"><div class="flame"></div><div class="word">Embr</div><div class="sp"></div>
+          <div class="btn primary">Rescan</div><div class="btn">⚙</div></div>
+        <div class="cards" style="padding:12px">
+          <div class="card">
+            <div class="ct"><div class="ctitle">SYSTEM — DARK · ACCENT #BD93F9</div></div>
+            <div class="rows">
+              <div class="row"><div class="lab"><b>Low battery alert</b><span>shared: 20% / 10%</span></div>
+                <div class="ctl"><span class="val">20</span><div class="seg"><span>▴</span><span>▾</span></div>
+                  <div class="btn">Default</div></div></div>
+              <div class="row"><div class="lab"><b>Notifications</b><span>off until you ask</span></div>
+                <div class="ctl"><div class="sw"><u></u></div></div></div>
+              <div class="row"><div class="lab"><b>Appearance</b><span>follow the desktop</span></div>
+                <div class="ctl"><div class="seg"><span class="on">System</span><span>Dark</span><span>Light</span></div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>Dark, accent from the system.</figcaption>
+    </figure>
+  </div>
+  <div class="col">
+    <figure style="margin-top:0">
+      <div class="app" data-scheme="light" style="width:520px;height:250px">
+        <div class="tt"><div class="flame"></div><div class="word" style="color:#1a1c20">Embr</div><div class="sp"></div>
+          <div class="btn primary">Rescan</div><div class="btn">⚙</div></div>
+        <div class="cards" style="padding:12px">
+          <div class="card" style="background:#fff">
+            <div class="ct"><div class="ctitle">SCHEME 2 — LIGHT · SAME ACCENT</div></div>
+            <div class="rows">
+              <div class="row"><div class="lab"><b>Low battery alert</b><span>shared: 20% / 10%</span></div>
+                <div class="ctl"><span class="val">20</span><div class="seg"><span>▴</span><span>▾</span></div>
+                  <div class="btn">Default</div></div></div>
+              <div class="row"><div class="lab"><b>Notifications</b><span>off until you ask</span></div>
+                <div class="ctl"><div class="sw"><u></u></div></div></div>
+              <div class="row"><div class="lab"><b>Appearance</b><span>follow the desktop</span></div>
+                <div class="ctl"><div class="seg"><span class="on">System</span><span>Dark</span><span>Light</span></div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>Light: the same tokens, the other scheme — the accent stays whatever the desktop says.</figcaption>
+    </figure>
+  </div>
+</div>
+<p class="foot-note">Cost of the theming change on its own: one module in <code>embr-app</code> that resolves
+(scheme, accent) from the portal with the <code>gsettings</code>/<code>settings.ini</code> fallback, a dark and a
+light token set in <code>app.slint</code> instead of one, one Appearance row (System / Dark / Light) and one
+config key. It is independent of the redesign and I would land it <i>first</i>, so the new screens are born themed.</p>
+
+<h3>The other reading of your sentence: make it an actual GTK 4 app</h3>
+<ul>
+  <li><b>What it buys:</b> real Adwaita/GTK widgets, so every GTK theme, <code>gtk.css</code> and the GTK font apply
+      by themselves; GTK's own accessibility and input; no Slint licence question.</li>
+  <li><b>What it costs:</b> the window layer is rewritten — <code>app.slint</code> is 1 557 lines, and the glue that
+      feeds it (<code>main.rs</code>, <code>view.rs</code>) roughly 1 000 — on top of the redesign itself, which
+      would then have to be done twice or not at all for a while. GTK 4 and libadwaita <i>are</i> installed here
+      (<code>/usr/lib/libgtk-4.so.1</code>, <code>libadwaita-1.so</code>), so it is a real option, not a
+      hypothetical.</li>
+  <li><b>My recommendation:</b> keep Slint, read the portal, and own the token palette. You get the scheme and your
+      accent — 90 % of what “adapt the system theme” looks like in practice — for about 2 % of the work, and the
+      redesign lands in the toolkit the device layer is already wired to. If you want Embr to <i>be</i> a GTK app,
+      say so and I will scope the rewrite properly before touching anything.</li>
+</ul>
+
+<!-- ============================================================ 5 -->
+<h2><span class="n">5</span> · Choices I made that you did not specify</h2>
+<ul>
+  <li><b>Features in the rail, not a tab strip.</b> I put the selected device's features under its row (G HUB's
+      left panel does the same) instead of a horizontal tab bar under the header: it keeps the second level inside
+      the column that is already about this device. Veto it and I will move them to tabs.</li>
+  <li><b>App settings behind a gear</b>, replacing the body, rather than staying a peer of “Devices”.</li>
+  <li><b>The narrow case turns the feature list into a chip row</b> above the page rather than hiding it.</li>
+  <li><b>Battery stays first and the rail keeps every device's level</b> — the app's alerting is its reason to
+      exist, and I did not want it to become one tab among six.</li>
+  <li><b>Live apply for device settings</b> (DPI, lighting) with a per-card <b>Reset</b>, and config-stored values
+      only for the app's own behaviour (alerts, tray, notifications).</li>
+  <li><b>Profiles stay out of phase 1.</b> G HUB's per-application profiles need a foreground-app watcher — a
+      different feature with its own design. Phase 1 is one “default” profile per device, stored in
+      <code>config.toml</code> beside the per-device alert levels that are already there.</li>
+</ul>
+
+<h2><span class="n">6</span> · What I need from you</h2>
+<ol>
+  <li><b>Toolkit:</b> Slint + follow the portal (my recommendation), or a real GTK 4 / libadwaita rewrite?</li>
+  <li><b>Navigation:</b> features under the device in the rail (as mocked), or a tab strip along the top of the page?</li>
+  <li><b>Appearance control:</b> System / Dark / Light row — and do we adopt <code>gtk-font-name</code>
+      (Maple Mono NF 12) or keep Noto Sans?</li>
+  <li><b>Scope of phase 1:</b> the shell plus <b>one</b> new feature page end-to-end — I would take DPI on the
+      G703, since it advertises <code>ADJUSTABLE DPI {2201}</code> and it is first on your roadmap — with the
+      feature list wired to <code>FEATURE SET {0001}</code> from the start?</li>
+</ol>
+<p class="foot-note">Nothing in the app is touched yet: this sheet is a proposal, and the mockups were drawn with
+the same tokens the window uses, the system accent your desktop reports, and the devices on your desk.</p>
+
+</body>
+</html>
