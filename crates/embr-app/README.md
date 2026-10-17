@@ -48,13 +48,21 @@ cargo run --release -p embr       # or: ./target/release/embr
 * **Says *Not answering* when nothing answered, even if a dongle did.** The G733's dongle replies to
   a ping in 2 ms whether the headset behind it is on or off, so a ping is not evidence about the
   device — the battery question is (`discover::answered`).
-* **One level deeper than a flat list: device → subject.** The rail is the devices; the selected one
-  expands to show the pages *it* has, and the right pane is the page you picked. The page list comes
+* **One level deeper than a flat list: device → subject.** The rail is a list of devices at a width
+  of its own — a `GtkPaned` divider, so no device name and no note under it can widen the column —
+  and the selected device's pages are a tab strip across the pane beside it. The page list comes
   from each device's own `FEATURE SET {0001}` (`core::pages_for`, read once per device and kept), so
-  the rail cannot offer the G913 keyboard a DPI page it has no feature for. Two things are said out
+  the strip cannot offer the G913 keyboard a DPI page it has no feature for. Two things are said out
   loud rather than hidden: a device that never answered about its features says **Features not read**
   (and Rescan asks again), and one that answered only *part* of its feature list says **Some features
   did not answer** — a subset is not the same thing as a device with no lighting.
+* **The tab you pick stays picked.** A reading arrives every few seconds and the window is redrawn
+  on every one of them, so the redraw is a *pull*: it writes values into widgets that already exist
+  and never chooses anything the user chooses. Which tab is showing is read back from the strip, and
+  a rebuild — a feature set arriving, a device's trouble changing — puts you back on the tab you
+  were on, per device. Measured on the running window: a click on Lighting was still Lighting twenty
+  seconds and four watch passes later, and switching to another device and back came back to
+  Lighting rather than to Battery.
 * **Two controls write**, both on the Battery page and both through `core`: the device's own
   low-battery level (a spin box, with *Shared* to put it back on the shared thresholds) and the
   snooze. A number the user is moving is protected from a snapshot taken before their edit — the page
@@ -122,8 +130,8 @@ take effect.
 ## Not implemented yet
 
 * **The feature pages beyond Battery and Device are stubs**, and they say so: DPI, lighting,
-  profiles, buttons and host switching are roadmap work, and the rail shows the pages the hardware
-  advertises so the shape is real before the contents are.
+  profiles, buttons and host switching are roadmap work, and the tab strip shows the pages the
+  hardware advertises so the shape is real before the contents are.
 * **A partial feature read is not retried by itself.** The window says so and Rescan asks again;
   nothing re-reads a device that answered half its feature list on its own initiative.
 * **Snooze feedback.** The snooze is real (the policy honours it), but the window does not say until

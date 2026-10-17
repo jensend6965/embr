@@ -90,6 +90,30 @@ pub fn install_level_css() {
     }
 }
 
+/// Write a label only when it would change.
+///
+/// This is for the per-tick path: four times a second, a write that says the same thing still costs
+/// a relayout, and a relayout under the pointer is what "choppy" feels like.
+pub fn set_text(label: &gtk4::Label, text: &str) {
+    if label.text() != text {
+        label.set_label(text);
+    }
+}
+
+/// The same, for a row's subtitle — which parses markup, so the text is escaped on the way in.
+pub fn set_subtitle(row: &adw::ActionRow, text: &str) {
+    if row.subtitle().as_deref() != Some(text) {
+        row.set_subtitle(&escaped(text));
+    }
+}
+
+/// The same, for a row's title.
+pub fn set_title(row: &adw::ActionRow, text: &str) {
+    if row.title().as_str() != text {
+        row.set_title(text);
+    }
+}
+
 /// Draw a device's level bar in the colour of its level.
 ///
 /// `core` decides which band a reading is in and what that band's colour is; this only puts the
@@ -102,9 +126,6 @@ pub fn install_level_css() {
 /// A device reporting a fault is red whatever its level: there the number is not the problem, and a
 /// fault on a full battery must not read as healthy.
 pub fn paint_level(bar: &gtk4::LevelBar, device: &DeviceView) {
-    for class in LEVEL_CLASSES {
-        bar.remove_css_class(class);
-    }
     let (class, tooltip) = if device.faulty {
         (
             Some(LEVEL_CLASSES[0]),
@@ -118,10 +139,23 @@ pub fn paint_level(bar: &gtk4::LevelBar, device: &DeviceView) {
             None => (None, None),
         }
     };
-    if let Some(class) = class {
-        bar.add_css_class(class);
+    // Only when it differs: adding and removing a style class invalidates the widget's CSS every
+    // time, and this is called with every tick for every device.
+    let current = LEVEL_CLASSES
+        .iter()
+        .find(|candidate| bar.has_css_class(candidate))
+        .copied();
+    if current != class {
+        for candidate in LEVEL_CLASSES {
+            bar.remove_css_class(candidate);
+        }
+        if let Some(class) = class {
+            bar.add_css_class(class);
+        }
     }
-    bar.set_tooltip_text(tooltip);
+    if bar.tooltip_text().as_deref() != tooltip {
+        bar.set_tooltip_text(tooltip);
+    }
 }
 
 #[cfg(test)]

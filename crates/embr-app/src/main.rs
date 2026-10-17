@@ -105,11 +105,15 @@ fn build(app: &adw::Application) {
     // The reading colours, before anything is drawn with them.
     crate::widgets::install_level_css();
 
+    // Open at a size that fits the screen it opens on. Asking for a fixed size is how a window ends
+    // up taller than the desktop: the header stays reachable and the bottom of the pane is simply
+    // below the screen edge, with no way to scroll it into view.
+    let (width, height) = default_window_size();
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Embr")
-        .default_width(1240)
-        .default_height(860)
+        .default_width(width)
+        .default_height(height)
         .build();
 
     // ---- the header: what the devices add up to, Rescan, the gear, and About ----
@@ -140,14 +144,22 @@ fn build(app: &adw::Application) {
     header.pack_end(&gear);
     header.set_title_widget(Some(&titles));
 
-    // ---- the body: the rail, and the page the rail picked ----
+    // ---- the body: the rail, and the pages of the device it picked ----
     let rail = Rc::new(Rail::new(events.clone()));
-    let content = Rc::new(Content::new());
-    let body = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-    body.append(&rail.container);
-    body.append(&gtk4::Separator::new(gtk4::Orientation::Vertical));
-    content.container.set_hexpand(true);
-    body.append(&content.container);
+    let content = Rc::new(Content::new(commands.clone()));
+    // A paned rather than a box with a separator between two children: the divider's position *is*
+    // the rail's width, so a long device name cannot widen the column and choosing a device cannot
+    // move it. `resize_start_child(false)` holds that width while the window grows — the pages take
+    // the extra room — and the divider is still there to be dragged when the user wants it wider.
+    let body = gtk4::Paned::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .start_child(&rail.container)
+        .end_child(&content.container)
+        .position(rail::WIDTH)
+        .resize_start_child(false)
+        .shrink_start_child(false)
+        .wide_handle(true)
+        .build();
 
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
@@ -181,8 +193,10 @@ fn build(app: &adw::Application) {
     // ---- what the window is showing, and what it has asked about ----
     let latest: Rc<RefCell<Option<State>>> = Rc::new(RefCell::new(None));
     let selected: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    // The page the user is on, remembered across devices: opening the keyboard after the mouse
-    // should not send you back to Battery if the keyboard has the page you were looking at.
+    // The last tab the pane was *seen* showing, for the one log line a switch deserves. Not an
+    // instruction: which page is open belongs to the pane and, through it, to the user — the tick
+    // reads it back and never sets it, which is what keeps a reading arriving mid-click from
+    // moving the user off the page they picked.
     let shown_page: Rc<RefCell<FeaturePage>> = Rc::new(RefCell::new(FeaturePage::Battery));
     // The devices whose feature set has been asked for. A feature set is an inventory rather than
     // a reading, so it is asked for once per device and again only when the user rescans.
@@ -300,11 +314,6 @@ fn build(app: &adw::Application) {
                         eprintln!("[app] showing {key}");
                         *selected.borrow_mut() = Some(key);
                     }
-                    UiEvent::ShowPage { key, page } => {
-                        eprintln!("[app] {key}: showing the {} page", page.label());
-                        *selected.borrow_mut() = Some(key);
-                        *shown_page.borrow_mut() = page;
-                    }
                     UiEvent::RestyleTray(look) => {
                         // The icons themselves first: the tray is one D-Bus round trip away, and
                         // this must not wait for a sweep. The configuration is written by the
@@ -397,23 +406,24 @@ fn build(app: &adw::Application) {
                             .map(|device| device.key.clone())
                     })
                     .or(chosen);
-                // The page survives a device change where the device has it. A keyboard has no
-                // DPI page, and that is the one case where the window picks for the user.
                 let device = snapshot
                     .devices
                     .iter()
                     .find(|device| Some(&device.key) == chosen.as_ref());
-                let page = match device.and_then(|device| device.pages.as_ref()) {
-                    Some(pages) if !pages.contains(&*shown_page.borrow()) => {
-                        pages.first().copied().unwrap_or(FeaturePage::Battery)
-                    }
-                    _ => *shown_page.borrow(),
-                };
                 *selected.borrow_mut() = chosen.clone();
-                *shown_page.borrow_mut() = page;
 
                 rail.sync(snapshot, chosen.as_deref(), now);
-                content.show(device, page, state, &commands, now);
+                content.sync(device, state, now);
+                // The tabs belong to the user, so this reads them rather than steering them:
+                // whatever the strip is showing is what the window now considers open, and a
+                // click on a tab therefore survives every snapshot that follows it. Said out loud
+                // because a tab switch is otherwise the one thing here with no trace.
+                if let Some(visible) = chosen.as_deref().and_then(|key| content.visible_page(key))
+                    && *shown_page.borrow() != visible
+                {
+                    eprintln!("[app] showing the {} page", visible.label());
+                    *shown_page.borrow_mut() = visible;
+                }
 
                 // A device whose feature set has not been read yet is asked about once. This is
                 // what fills the rail under the open device, and it is why the rail can only
@@ -441,7 +451,7 @@ fn build(app: &adw::Application) {
                     .devices
                     .iter()
                     .find(|device| Some(&device.key) == open.as_ref());
-                content.refresh_ages(device, now);
+                content.refresh_ages(device, &state.snapshot, now);
             }
             show_refreshing(
                 &rescan,
@@ -518,7 +528,7 @@ fn build(app: &adw::Application) {
     if let Ok(id) = std::env::var(DEBUG_PAGE_VARIABLE) {
         match FeaturePage::from_id(&id) {
             Some(page) => {
-                let shown_page = shown_page.clone();
+                let content = content.clone();
                 let latest = latest.clone();
                 let waiting = Cell::new(true);
                 glib::timeout_add_local(Duration::from_millis(500), move || {
@@ -536,7 +546,9 @@ fn build(app: &adw::Application) {
                             "[app] {DEBUG_PAGE_VARIABLE}={id}: opening the {} page",
                             page.label()
                         );
-                        *shown_page.borrow_mut() = page;
+                        // The one place outside the pane that moves the view, and it says so:
+                        // nothing in the tick ever calls this.
+                        content.request_page(page);
                     }
                     glib::ControlFlow::Continue
                 });
@@ -602,5 +614,66 @@ fn show_refreshing(
     } else {
         spinner.stop();
         button.set_child(Some(icon));
+    }
+}
+
+/// The window's opening size: what the layout is comfortable at, cut down to fit the screen.
+///
+/// The rail is a fixed 340 px and the pane wants room for a two-column row, so 1240×860 is the size
+/// the layout is designed for. On anything smaller — a 1366×768 laptop, a tiled window — that size
+/// is refused and the app opens with its bottom edge off the desktop, so the request is capped at
+/// nine tenths of the monitor's geometry, in the same logical pixels GTK lays out in.
+fn default_window_size() -> (i32, i32) {
+    const WANTED: (i32, i32) = (1240, 860);
+    /// Below this the two-pane layout stops being usable at all; better a window that is too big
+    /// for a tiny screen than one with no room for its own controls.
+    const FLOOR: (i32, i32) = (720, 520);
+
+    let Some(display) = gtk4::gdk::Display::default() else {
+        return WANTED;
+    };
+    let Some(monitor) = display
+        .monitors()
+        .item(0)
+        .and_then(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
+    else {
+        return WANTED;
+    };
+    let area = monitor.geometry();
+    let size = (
+        fit(WANTED.0, area.width(), FLOOR.0),
+        fit(WANTED.1, area.height(), FLOOR.1),
+    );
+    eprintln!(
+        "[app] opening at {}x{} (screen {}x{})",
+        size.0,
+        size.1,
+        area.width(),
+        area.height()
+    );
+    size
+}
+
+/// One axis of [`default_window_size`]: the size asked for, capped to nine tenths of what the screen
+/// has, but never below the floor the layout needs.
+fn fit(want: i32, have: i32, floor: i32) -> i32 {
+    want.min((have * 9 / 10).max(floor))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit;
+
+    #[test]
+    fn a_window_fits_the_screen_it_opens_on() {
+        // This desktop: the wanted size fits with room to spare, so it is left alone.
+        assert_eq!(fit(1240, 2560, 720), 1240);
+        assert_eq!(fit(860, 1080, 520), 860);
+        // A 1366x768 laptop: nine tenths, so the bottom edge lands on the desktop.
+        assert_eq!(fit(1240, 1366, 720), 1229);
+        assert_eq!(fit(860, 768, 520), 691);
+        // Smaller than the floor: a slightly too big window beats one with no room for its controls.
+        assert_eq!(fit(1240, 640, 720), 720);
+        assert_eq!(fit(860, 400, 520), 520);
     }
 }

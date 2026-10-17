@@ -6,7 +6,7 @@
 
 use std::sync::mpsc::Sender;
 
-use embr_core::{FeaturePage, Snapshot, Theme, TrayLook, TrayStyle, TrayTextColor};
+use embr_core::{Snapshot, Theme, TrayLook, TrayStyle, TrayTextColor};
 
 /// The window (or the settings page) → the device thread.
 #[derive(Debug, Clone)]
@@ -94,8 +94,6 @@ pub struct State {
 pub enum UiEvent {
     /// Open one device: expand its row and show it.
     Select(String),
-    /// Show one page of one device.
-    ShowPage { key: String, page: FeaturePage },
     /// The tray picker moved: draw the icons now, the way the switch it owns does, rather than
     /// queueing the change behind whatever sweep is in flight.
     RestyleTray(TrayLook),

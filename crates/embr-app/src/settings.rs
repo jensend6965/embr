@@ -560,9 +560,12 @@ impl Settings {
                 self.devices_group.remove(&row);
             }
             for device in &snapshot.devices {
+                // A device name is the hardware's word, not ours: a row that parses markup would
+                // silently drop one containing `&`. Everything else here goes through `widgets::row`.
                 let row = adw::SwitchRow::builder()
                     .title(&device.name)
                     .subtitle(&device.percent_text)
+                    .use_markup(false)
                     .active(chosen.contains(&device.key))
                     .build();
                 row.connect_active_notify({
