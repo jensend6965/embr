@@ -89,55 +89,89 @@ Practically: read it before you run it, and report what breaks. HID++ has no rea
   which is ordinary text you can edit by hand — the page and the file never disagree, because the
   page reads the file.
 
-## Install
+## Build from source
+
+**There is no package yet** — no `.deb`, `.rpm`, Flatpak or Arch package, and nothing in a
+repository. Until there is, one script is the whole install:
 
 ```bash
-# Debian / Ubuntu — to build it
-sudo apt install libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
-
-cargo build --release
-./target/release/embr
+git clone https://github.com/jensend6965/embr.git
+cd embr
+./scripts/install.sh
 ```
 
-Needs Rust 1.85 or newer. On Fedora and Arch the packages are `gtk4-devel` (or `gtk4`),
-`libadwaita`, `dbus` and `pkgconf`. GTK 4 and libadwaita are needed *at runtime* too — every
-desktop that ships a GNOME-derived shell already has them. Embr takes its font from the desktop,
-uses the desktop's colour scheme and accent, and ships no fonts and no theme of its own.
+It builds a release binary and puts it where your desktop already looks, so **Embr is in your
+launcher** afterwards — and `embr` runs it from a terminal. No root, no flags, and nothing left
+running in the background.
 
-### Installing it for one user
+**What it needs.** Rust 1.85 or newer ([rustup.rs](https://rustup.rs); a distribution's `rust`
+package is usually too old), and three libraries with their headers:
 
-No root needed and nothing left running. Every path below is one your desktop already looks at:
+| | |
+| --- | --- |
+| **GTK 4.12 or newer** and **libadwaita 1.5 or newer** | the window — the build stops before your code compiles if they are older |
+| **libdbus-1** | the tray item links the C library (`ksni` has no pure-Rust backend) |
+| `pkg-config` | how the two above are found |
+
+| distribution | the packages |
+| --- | --- |
+| Fedora 40 and newer | `sudo dnf install gtk4-devel libadwaita-devel dbus-devel pkgconf-pkg-config` |
+| Arch, Manjaro | `sudo pacman -S --needed base-devel gtk4 libadwaita dbus pkgconf` |
+| Debian 13+, Ubuntu 24.04+ | `sudo apt install libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config` |
+
+The script checks for all of them before it builds and names what is missing, rather than letting
+`cargo` fail half a minute later. GTK 4 and libadwaita are needed **at runtime** as well, and every
+desktop that ships a GNOME-derived shell already has them; Embr takes its font from the desktop,
+follows its colour scheme and accent, and ships no fonts and no theme of its own.
+
+**What it installs**
+
+| | |
+| --- | --- |
+| `~/.local/bin/embr` | the binary |
+| `~/.local/share/applications/io.github.jensend6965.Embr.desktop` | the launcher entry, naming that binary by full path so it works even when `~/.local/bin` is not on the session's `PATH` |
+| `~/.local/share/icons/hicolor/scalable/apps/embr.svg` | the icon it draws, from `assets/embr.svg` |
+
+`$XDG_BIN_HOME` and `$XDG_DATA_HOME` are honoured when they are set. Nothing else is installed: the
+tray icon and the notifications come from the session D-Bus, so there is no service to enable.
+
+`cargo test --workspace` and `cargo clippy --workspace --all-targets` need no hardware and no
+display, so a fresh clone can be checked before it is run.
+
+### Updating it
+
+Re-run the same script; it rebuilds and copies the new binary over the old one:
 
 ```bash
-install -Dm755 target/release/embr ~/.local/bin/embr
-install -Dm644 assets/embr.svg ~/.local/share/icons/hicolor/scalable/apps/embr.svg
-
-# a panel that wants a PNG gets one
-for s in 16 24 32 48 64 128 256; do
-  install -d ~/.local/share/icons/hicolor/${s}x${s}/apps
-  rsvg-convert -w $s -h $s assets/embr.svg -o ~/.local/share/icons/hicolor/${s}x${s}/apps/embr.png
-done
-gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
+cd embr
+git pull --ff-only
+./scripts/install.sh
 ```
 
-and a desktop entry **named after the application id**, which is how a dock, a switcher and a
-launcher find the icon for a running window:
+Then start Embr again — a copy that is already running keeps the build it started with, so **quit it
+from the tray** first (closing the window is not quitting while *Close to tray* is on). While an old
+copy runs, `ls -l /proc/$(pgrep -x embr)/exe` ends in `(deleted)`; after a restart it does not.
 
-```ini
-# ~/.local/share/applications/io.github.jensend6965.Embr.desktop
-[Desktop Entry]
-Type=Application
-Name=Embr
-Comment=Battery levels for Logitech devices
-Exec=embr
-Icon=embr
-Categories=Settings;HardwareSettings;
+There are no numbered releases yet and no tags, so `main` is what you are tracking and `git log` is
+the changelog. Once a package exists this becomes `dnf upgrade embr` or an AUR update.
+
+### Uninstalling it
+
+```bash
+./scripts/install.sh --uninstall
 ```
 
-`update-desktop-database ~/.local/share/applications` afterwards. The name matters: a GTK
-application is matched to its entry by the id it was built with (`io.github.jensend6965.Embr`), so
-`embr.desktop` would leave the window with a blank tile — this is the one install detail that
-changed when the window moved from Slint to GTK.
+It removes the three files above and leaves your settings in `~/.config/embr` alone, so a reinstall
+comes back to the same thresholds — delete that directory to forget them too. The udev rule below is
+separate: if you installed it, `sudo rm /etc/udev/rules.d/70-embr-hidraw.rules && sudo udevadm
+control --reload-rules`. The clone itself is just a directory (`rm -rf embr`).
+
+**Packaging is on the roadmap, not done.** The plan is a [COPR](https://copr.fedorainfracloud.org)
+repository for Fedora, which gives `dnf install embr` plus a repo file, and an AUR package for Arch —
+built with `makepkg`, installed through `pacman -U`, which is the Arch route that does not need a
+maintainer to host binaries; a binary pacman repository only if the AUR entry turns out not to be
+enough. `scripts/install.sh` is deliberately the same three files a package would install, so a
+package wraps it rather than redefining the layout.
 
 ## Device access
 
@@ -199,9 +233,10 @@ cargo clippy --workspace --all-targets    # keep this silent
 ## Roadmap
 
 * **Configuration** — DPI, RGB effects, host switching, then buttons.
-* **Packaging** — the desktop entry, icon and udev rule are documented in `Install` above and
-  installed by hand; a package, a systemd user unit and an install script would make that one step
-  rather than five.
+* **Packaging** — a COPR repository for Fedora and an AUR package for Arch (see *Build from
+  source* above). The desktop entry, the icon and the udev rule then arrive with the package
+  instead of `scripts/install.sh` copying them into `~/.local`, and a systemd user unit would give
+  the "keeps watching with the window closed" half a proper home.
 * **A background daemon**, so notifications keep working with the window closed.
 * **Translations**, and a voltage curve measured from our own devices rather than the one noted
   below.
