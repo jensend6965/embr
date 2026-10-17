@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Embr
+GenericName=Battery Monitor
+Comment=Battery levels for Logitech mice, keyboards and headsets
+Exec=embr
+Icon=embr
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=logitech;battery;mouse;keyboard;headset;hidpp;
+StartupNotify=true
+StartupWMClass=io.github.jensend6965.Embr
