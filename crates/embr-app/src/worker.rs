@@ -28,12 +28,22 @@ use crate::messages::{Command, State};
 /// a real one takes.
 const DEBUG_ALERT_VARIABLE: &str = "EMBR_DEBUG_ALERT";
 
+/// A hidden switch for the *Problems* surface: `EMBR_DEBUG_WARNINGS='slot 3: no reply; a node is
+/// unreadable' embr` declares machine-wide problems nothing on this desk is producing.
+///
+/// The rows under the tabs otherwise only appear when hardware misbehaves in the middle of a sweep,
+/// which is not something a window can be looked at on demand — and getting that path wrong once
+/// cost a frozen window and 39 GB of warnings. Semicolon-separated, one row each.
+const DEBUG_WARNINGS_VARIABLE: &str = "EMBR_DEBUG_WARNINGS";
+
 pub struct DeviceWorker {
     monitor: Monitor,
     states: Sender<State>,
     notices: Sender<Notice>,
     tray: Icons,
     debug_alert: bool,
+    /// Declared problems, for `EMBR_DEBUG_WARNINGS`: empty unless the switch asked for them.
+    debug_warnings: Vec<String>,
 }
 
 /// Start the device thread. Errors are the caller's to report — a window with no device thread is
@@ -50,6 +60,15 @@ pub fn spawn(
         notices,
         tray,
         debug_alert: std::env::var_os(DEBUG_ALERT_VARIABLE).is_some(),
+        debug_warnings: std::env::var(DEBUG_WARNINGS_VARIABLE)
+            .map(|text| {
+                text.split(';')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
     thread::Builder::new()
         .name("devices".to_string())
@@ -76,6 +95,12 @@ impl DeviceWorker {
 
         let mut first = true;
         loop {
+            // Before anything is published: the problems the switch declared are part of every
+            // snapshot, so the window's Problems group is drawn from the first one on.
+            if !self.debug_warnings.is_empty() {
+                self.monitor.debug_warnings(self.debug_warnings.clone());
+            }
+
             // The first thing this thread does is the first read, with the waits a device coming
             // back from sleep needs — because the first read here *is* the window opening, and
             // `core`'s own rule for that is a read at once rather than at the next scheduled

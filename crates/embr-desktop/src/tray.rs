@@ -730,6 +730,7 @@ mod tests {
             level: None,
             pages: None,
             pages_partial: false,
+            pages_unanswered: false,
             error: None,
             captured: None,
         }

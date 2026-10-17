@@ -7,8 +7,10 @@
 //! from making the window jump.
 //!
 //! The tabs are the device's own pages, because they come from `core::pages_for`: this cannot offer
-//! a keyboard a DPI page it has no feature for. A page that is not built yet says so, and says what
-//! it is evidence of.
+//! a keyboard a DPI page it has no feature for — and it is narrowed again by what this build can
+//! actually fill in (`FeaturePage::offered`), because a tab whose contents are a sentence about
+//! what is not there yet is a promise rather than a page. A page that is not built yet says so, and
+//! says what it is evidence of.
 //!
 //! Nothing here decides anything. The level, the age, the alert threshold and the words for a
 //! status are `core`'s (`DeviceView`, `human_age`, `thresholds_text`); this file arranges them.
@@ -22,7 +24,7 @@ use std::time::SystemTime;
 use adw::prelude::*;
 use gtk4::{Align, Orientation};
 
-use embr_core::{DeviceView, FeaturePage, Snapshot, human_age, snooze_caption};
+use embr_core::{DeviceView, FeaturePage, Features, Snapshot, features, human_age, snooze_caption};
 
 use crate::messages::{Command, State, dispatch};
 use crate::widgets;
@@ -56,6 +58,16 @@ pub struct Content {
     /// readable. Not about one page, so it sits under the tabs whichever one is showing.
     warnings: adw::PreferencesGroup,
     warnings_for: RefCell<String>,
+    /// The rows currently in the group, so that they — and only they — can be taken out again.
+    ///
+    /// **Never walk a preference group's children.** `AdwPreferencesGroup::first_child` hands back
+    /// the group's own template child, a `GtkBox` that was not added with `add()`, and `remove`
+    /// refuses it (`Adwaita-CRITICAL: tried to remove non-child … GtkBox from … AdwPreferencesGroup`)
+    /// while removing nothing — so a `while let Some(row) = group.first_child() { group.remove(&row) }`
+    /// loop never ends. Measured on this machine: one frozen window wrote **39 GB** of that warning
+    /// in fifty minutes, at 12 MB/s, with the pane it had drawn by then stuck on screen. Remembering
+    /// what was added is the same shape the settings page's device rows already use.
+    warnings_rows: RefCell<Vec<adw::ActionRow>>,
     shown: RefCell<Option<Shown>>,
     /// The tab the user last had open on each device, by key.
     ///
@@ -187,6 +199,7 @@ impl Content {
             stack: RefCell::new(None),
             warnings,
             warnings_for: RefCell::new(String::new()),
+            warnings_rows: RefCell::new(Vec::new()),
             shown: RefCell::new(None),
             remembered: RefCell::new(HashMap::new()),
             requested: RefCell::new(None),
@@ -335,23 +348,25 @@ impl Content {
 
     /// Say what is not known about this device's feature set, and offer the fix.
     ///
-    /// Two different things look identical otherwise: "this keyboard has no lighting" and "this
-    /// keyboard did not say". The tabs are only ever the pages the device named.
+    /// Three different things used to look identical: "this keyboard has no lighting" and "this
+    /// keyboard did not say" and "we have not asked yet". The tabs are only ever the pages the
+    /// device named; which of the three states this is comes from `core::features`, because a
+    /// device that was asked and said nothing must not be described as one still being asked.
     fn show_notice(&self, device: &DeviceView) {
-        let (title, button) = match device.pages {
-            None if device.error.is_some() => (
+        let (title, button) = match features(device) {
+            Features::Unanswered => (
                 "Features not read — this device did not answer",
                 Some("Rescan"),
             ),
-            None => (
+            Features::Asking => (
                 "Features not read — asking this device what it can be asked about",
                 None,
             ),
-            Some(_) if device.pages_partial => (
+            Features::Known if device.pages_partial => (
                 "This device answered for only part of its feature list, so these are the pages it named",
                 None,
             ),
-            Some(_) => ("", None),
+            Features::Known => ("", None),
         };
         let revealed = !title.is_empty();
         self.notice.set_revealed(revealed);
@@ -371,11 +386,15 @@ impl Content {
         if *self.warnings_for.borrow() == text {
             return;
         }
-        while let Some(row) = self.warnings.first_child() {
+        // Only the rows this method added, tracked by hand: see `warnings_rows` for what walking a
+        // preference group's children instead does to the app.
+        for row in self.warnings_rows.borrow_mut().drain(..) {
             self.warnings.remove(&row);
         }
         for warning in &snapshot.warnings {
-            self.warnings.add(&widgets::row(warning));
+            let row = widgets::row(warning);
+            self.warnings.add(&row);
+            self.warnings_rows.borrow_mut().push(row);
         }
         self.warnings.set_visible(!snapshot.warnings.is_empty());
         *self.warnings_for.borrow_mut() = text;
@@ -748,10 +767,10 @@ fn placeholder_page(page: FeaturePage, device: &DeviceView) -> adw::PreferencesP
     page_widget
 }
 
-/// `read 10s ago · lowest of 3 devices` — the line under the device's name.
+/// `read 1 min ago · 12:23 17/10/2026 · lowest of 3 devices` — the line under the device's name.
 fn subtitle_for(device: &DeviceView, snapshot: &Snapshot, now: SystemTime) -> String {
     let mut parts = vec![match device.captured {
-        Some(captured) => format!("read {}", human_age(captured, now)),
+        Some(captured) => format!("read {}", updated_text(captured, now)),
         None => "never read".to_string(),
     }];
     if let Some(lowest) = snapshot.lowest()
@@ -766,10 +785,39 @@ fn subtitle_for(device: &DeviceView, snapshot: &Snapshot, now: SystemTime) -> St
     parts.join(" · ")
 }
 
-/// `never`, `just now`, `10s ago` — the age of this device's reading.
+/// `1 min ago · 12:23 17/10/2026` — when a reading was taken: how long ago in words, and the exact
+/// moment on the user's own clock.
+///
+/// The two halves do different jobs. The words are coarse (`core::human_age` never counts seconds)
+/// so this line does not redraw itself every tick — a number that changes constantly reads as an
+/// app that is busy rather than as a battery — and the stamp is there because rounding to the
+/// minute would otherwise throw away when it happened. More than a day old and the date is what
+/// matters anyway; that is printed either way.
+fn updated_text(captured: SystemTime, now: SystemTime) -> String {
+    format!("{} · {}", human_age(captured, now), stamp(captured))
+}
+
+/// A moment as this session's clock writes it: `12:23 17/10/2026`.
+///
+/// `glib` is what knows the timezone the desktop is in — `SystemTime` is UTC and this app has no
+/// date library — and it is the same library the window is drawn with, so there is nothing new to
+/// depend on. A clock that cannot be read (a system with no timezone at all) prints a dash rather
+/// than a wrong time.
+fn stamp(moment: SystemTime) -> String {
+    let seconds = moment
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0);
+    gtk4::glib::DateTime::from_unix_local(seconds)
+        .and_then(|time| time.format("%H:%M %d/%m/%Y"))
+        .map(|text| text.to_string())
+        .unwrap_or_else(|_| "—".to_string())
+}
+
+/// `never`, `just now · 12:23 17/10/2026` — the age of this device's reading.
 fn age_text(device: &DeviceView, now: SystemTime) -> String {
     match device.captured {
-        Some(captured) => human_age(captured, now),
+        Some(captured) => updated_text(captured, now),
         None => "never".to_string(),
     }
 }

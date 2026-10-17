@@ -1,8 +1,12 @@
 //! Small shared pieces of the window, in one place so that a decision is made once.
 
+use std::time::SystemTime;
+
 use adw::prelude::*;
 
-use embr_core::{DeviceKind, DeviceView, LOW_AT_OR_BELOW, Level, MEDIUM_AT_OR_BELOW, level_color};
+use embr_core::{
+    DeviceKind, DeviceView, LOW_AT_OR_BELOW, Level, MEDIUM_AT_OR_BELOW, human_age, level_color,
+};
 
 /// A row whose title and subtitle are text, not markup.
 ///
@@ -88,6 +92,33 @@ pub fn install_level_css() {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+}
+
+/// When a reading was taken, in words and on the clock: `1 min ago · 12:23 17/10/2026`.
+///
+/// The two halves do different jobs. The words are coarse — `core::human_age` never counts seconds
+/// — so a line carrying them does not redraw itself every tick: a number that changes constantly
+/// reads as an app that is busy rather than as a battery, which is exactly what the user asked to
+/// stop. The stamp is there because rounding to the minute would otherwise throw away *when* it
+/// happened; the date is printed with it, so an old reading says which day it is from.
+pub fn updated_text(captured: SystemTime, now: SystemTime) -> String {
+    format!("{} · {}", human_age(captured, now), stamp(captured))
+}
+
+/// A moment as this session's clock writes it: `12:23 17/10/2026`.
+///
+/// `glib` is what knows which timezone the desktop is in — `SystemTime` is UTC and this window has
+/// no date library — and it is the library the window is already drawn with, so this costs no new
+/// dependency. A clock that cannot be read prints a dash rather than a wrong time.
+pub fn stamp(moment: SystemTime) -> String {
+    let seconds = moment
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0);
+    gtk4::glib::DateTime::from_unix_local(seconds)
+        .and_then(|time| time.format("%H:%M %d/%m/%Y"))
+        .map(|text| text.to_string())
+        .unwrap_or_else(|_| "—".to_string())
 }
 
 /// Write a label only when it would change.
@@ -396,5 +427,29 @@ mod tests {
     fn markup_in_our_wording_is_escaped_at_the_widget() {
         assert_eq!(escaped("DPI & sensitivity"), "DPI &amp; sensitivity");
         assert_eq!(escaped("embr-<device>"), "embr-&lt;device&gt;");
+    }
+
+    /// A reading says how long ago it was taken *and* when, and the two halves are made here so the
+    /// rail and the page cannot word the same moment differently.
+    #[test]
+    fn an_updated_line_carries_the_age_and_the_clock_time() {
+        let moment = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let clock = stamp(moment);
+        let (hour, date) = clock.split_once(' ').expect("`HH:MM DD/MM/YYYY`");
+        assert_eq!(hour.len(), 5, "the time of day: {clock}");
+        assert_eq!(hour.as_bytes()[2], b':', "{clock}");
+        assert_eq!(date.len(), 10, "the day it happened: {clock}");
+        assert_eq!(date.matches('/').count(), 2, "{clock}");
+
+        // The words in front of it are `core`'s and never count seconds, which is what keeps this
+        // line from redrawing itself four times a second.
+        assert_eq!(
+            updated_text(moment, moment + std::time::Duration::from_secs(30)),
+            format!("just now · {clock}")
+        );
+        assert_eq!(
+            updated_text(moment, moment + std::time::Duration::from_secs(90)),
+            format!("1 min ago · {clock}")
+        );
     }
 }

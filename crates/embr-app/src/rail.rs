@@ -18,7 +18,7 @@ use std::time::SystemTime;
 use adw::prelude::*;
 use gtk4::{Align, Orientation};
 
-use embr_core::{DeviceView, Snapshot, human_age};
+use embr_core::{DeviceView, Snapshot, human_age, summary_text};
 
 use crate::messages::UiEvent;
 use crate::widgets;
@@ -35,6 +35,12 @@ pub struct Rail {
     /// The container to put in the window.
     pub container: gtk4::Widget,
     list: gtk4::ListBox,
+    /// What the column says above the rows: the devices it has and the worst reading among them.
+    ///
+    /// This is the sentence the window's *header* used to carry (`3 devices · lowest ~47%`), moved
+    /// to sit over the list it is about — the header's line is the app's own name now — and written
+    /// the way this column already writes its heading.
+    heading: gtk4::Label,
     scrub: gtk4::Label,
     empty: gtk4::Label,
     rows: Rc<RefCell<Vec<Row>>>,
@@ -54,8 +60,8 @@ impl Rail {
         header.set_margin_bottom(6);
         header.set_margin_start(18);
         header.set_margin_end(18);
-        let title = gtk4::Label::builder().label("DEVICES").xalign(0.0).build();
-        title.add_css_class("caption-heading");
+        let heading = gtk4::Label::builder().label("DEVICES").xalign(0.0).build();
+        heading.add_css_class("caption-heading");
         let scrub = gtk4::Label::builder()
             .label("")
             .xalign(1.0)
@@ -63,7 +69,7 @@ impl Rail {
             .build();
         scrub.add_css_class("caption");
         scrub.add_css_class("dim-label");
-        header.append(&title);
+        header.append(&heading);
         header.append(&scrub);
 
         // One list box for every device rather than one per device: the selection becomes a
@@ -121,6 +127,7 @@ impl Rail {
         Self {
             container: container.upcast(),
             list,
+            heading,
             scrub,
             empty,
             rows,
@@ -184,6 +191,12 @@ impl Rail {
         }
         drop(rows);
 
+        // What the column holds, over the rows it holds it for. Uppercased because that is how this
+        // heading has always been written; the sentence itself is `core`'s.
+        let heading = summary_text(snapshot).to_uppercase();
+        if self.heading.text() != heading {
+            self.heading.set_label(&heading);
+        }
         let scrub = taken_label(snapshot, now);
         if self.scrub.text() != scrub {
             self.scrub.set_label(&scrub);
@@ -297,9 +310,14 @@ fn summary(device: &DeviceView, now: SystemTime) -> String {
     format!("{} · {} · {}", device.status, device.kind_label, age)
 }
 
+/// `just now · 12:23 17/10/2026` — when the readings in this list were taken.
+///
+/// This is the "last updated" line: in words, then on the clock, so the row does not count seconds
+/// and the exact time is still there to read. It is the one place in the rail with room for both —
+/// a row's own line is clamped to one line (`…`), so a row carries only the coarse age.
 fn taken_label(snapshot: &Snapshot, now: SystemTime) -> String {
     match snapshot.taken {
-        Some(taken) => human_age(taken, now),
+        Some(taken) => crate::widgets::updated_text(taken, now),
         None => "never".to_string(),
     }
 }

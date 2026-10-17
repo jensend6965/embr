@@ -5,8 +5,9 @@ dialog, a tray icon and desktop notifications. Binary name **`embr`**.
 
 It draws what `embr-core` gives it and decides nothing: the device list, the percentage text
 (including the `~` that marks a value inferred from voltage), the status label, the pages a device
-has, the alert level, the tray tooltip and the ages (`12s ago`) all come from `embr-core`. The tray
-icons and the notifications come from `embr-desktop`, which is toolkit-free D-Bus code.
+has, the alert level, the tray tooltip and the ages (`just now`, `1 min ago · 12:23 17/10/2026`) all
+come from `embr-core`. The tray icons and the notifications come from `embr-desktop`, which is
+toolkit-free D-Bus code.
 
 The window is written with **GTK 4 + libadwaita** (`gtk4-rs`). It was Slint until the port finished;
 `spikes/004-gtk4-gui/README.md` has what the two toolkits cost and give, measured.
@@ -25,8 +26,8 @@ cargo run --release -p embr       # or: ./target/release/embr
   the window closed it backs off to at least every two minutes; and it reads the moment the window
   comes back — with the longer waits a device that has been asleep needs. `core::scheduled_interval`
   decides those numbers; the window only counts. A sweep of two receivers takes seconds, so it runs
-  on its own thread: the window stays painted, the ages keep ticking, and the rows keep showing the
-  previous reading while a sweep is in flight.
+  on its own thread: the window stays painted, the clock beside each reading stays right, and the
+  rows keep showing the previous reading while a sweep is in flight.
 * **Asks every device whether it is still there, every five seconds, while the window is open.** A
   sweep on the user's interval is far too rare to notice a device *switching off* — the kernel says
   nothing when a headset is powered down behind its dongle — so between sweeps each device gets one
@@ -50,12 +51,19 @@ cargo run --release -p embr       # or: ./target/release/embr
   device — the battery question is (`discover::answered`).
 * **One level deeper than a flat list: device → subject.** The rail is a list of devices at a width
   of its own — a `GtkPaned` divider, so no device name and no note under it can widen the column —
-  and the selected device's pages are a tab strip across the pane beside it. The page list comes
-  from each device's own `FEATURE SET {0001}` (`core::pages_for`, read once per device and kept), so
-  the strip cannot offer the G913 keyboard a DPI page it has no feature for. Two things are said out
-  loud rather than hidden: a device that never answered about its features says **Features not read**
-  (and Rescan asks again), and one that answered only *part* of its feature list says **Some features
-  did not answer** — a subset is not the same thing as a device with no lighting.
+  and the selected device's pages are a tab strip across the pane beside it. The column's heading is
+  the devices it has and the worst reading among them (`3 DEVICES · LOWEST ~47%`), with when the
+  readings were taken beside it; the window's own title is the app's name. The page list comes from
+  each device's own `FEATURE SET {0001}` (`core::pages_for`, read once per device and kept), so the
+  strip cannot offer the G913 keyboard a DPI page it has no feature for, and it offers nothing whose
+  controls are not written: `FeaturePage::offered` keeps the five roadmap pages out of the window
+  (Jensen's 2026-10-17 ask — "we only able to control battery monitoring"), while `core::pages_for`
+  still reads and keeps the whole inventory for the roadmap and the log. Two things are said out
+  loud rather than hidden: a device that has not answered about its features yet says **asking this
+  device what it can be asked about**, is asked again on `core`'s ladder (10 s, then 20 s, three
+  attempts), and then says **this device did not answer** with Rescan beside it; and one that
+  answered only *part* of its feature list says **Some features did not answer** — a subset is not
+  the same thing as a device with no lighting.
 * **The tab you pick stays picked.** A reading arrives every few seconds and the window is redrawn
   on every one of them, so the redraw is a *pull*: it writes values into widgets that already exist
   and never chooses anything the user chooses. Which tab is showing is read back from the strip, and
@@ -136,11 +144,14 @@ take effect.
 
 ## Not implemented yet
 
-* **The feature pages beyond Battery and Device are stubs**, and they say so: DPI, lighting,
-  profiles, buttons and host switching are roadmap work, and the tab strip shows the pages the
-  hardware advertises so the shape is real before the contents are.
-* **A partial feature read is not retried by itself.** The window says so and Rescan asks again;
-  nothing re-reads a device that answered half its feature list on its own initiative.
+* **The feature pages beyond Battery and Device are not in the window at all.** DPI, lighting,
+  profiles, buttons and host switching are roadmap work; a page appears only once its controls exist
+  (`FeaturePage::offered`), because a tab whose contents are a sentence about what is missing is a
+  promise rather than a page. What the hardware advertised is still read, kept (`core::pages_for`)
+  and logged — that is what the roadmap is built from — it is just not offered as a tab.
+* **A partial feature read is not retried by itself.** A device that answered *nothing* is asked
+  again on its own (three times over a minute) and then says it did not answer; one that answered
+  half its feature list is not re-read until Rescan.
 * **Snooze feedback.** The snooze is real (the policy honours it), but the window does not say until
   when, and does not un-snooze.
 * **Only the first notice is shown** — `Monitor::notices` is a list.
@@ -158,12 +169,18 @@ EMBR_DEBUG_ALERT=1 ./target/release/embr        # one synthetic low-battery aler
 EMBR_DEBUG_SETTINGS=1 ./target/release/embr     # open the settings dialog at startup
 EMBR_DEBUG_PAGE=lighting ./target/release/embr  # open a page that would otherwise need a click
 EMBR_DEBUG_DEVICE=G913 ./target/release/embr    # open a device that is not the worst one
+EMBR_DEBUG_WARNINGS='slot 3: no reply' ./target/release/embr   # declare a machine-wide problem
 ```
 
 `EMBR_DEBUG_PAGE` waits for the feature set to arrive and opens the page only if the device has it —
-a page the hardware cannot serve is not a page. The other three exist because those parts are
-otherwise click-only, and nothing on this desktop can inject a click. None of them changes anything
-else.
+a page the hardware cannot serve is not a page, and a page this build has no controls for is not
+offered by any device, so the flag says which of the two it is instead of waiting for ever. The
+other four exist because those parts are otherwise click-only, and nothing on this desktop can
+inject a click. `EMBR_DEBUG_WARNINGS` takes
+semicolon-separated sentences, one row each, and is the only way to look at the **Problems** group
+under the tabs without a receiver misbehaving in the middle of a sweep — that group's rows are drawn
+from a list this app keeps, and getting that bookkeeping wrong once froze the window. None of them
+changes anything else.
 
 ## Verifying the tray without a bar that draws it
 

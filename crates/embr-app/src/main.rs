@@ -19,7 +19,7 @@ mod widgets;
 mod worker;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
@@ -27,7 +27,7 @@ use std::time::{Duration, Instant, SystemTime};
 use adw::prelude::*;
 use gtk4::glib;
 
-use embr_core::{FeaturePage, TrayStyle, WindowClose, summary_text, window_close_action};
+use embr_core::{FeaturePage, TrayStyle, WindowClose, window_close_action};
 use embr_desktop::tray::Icons;
 use embr_desktop::{Notice, TrayAction, dispatch_note, notify};
 
@@ -148,6 +148,11 @@ fn build(app: &adw::Application) {
         .icon_name("dialog-information-symbolic")
         .tooltip_text("About Embr")
         .build();
+    // The header's top line is the app's own name. What the devices add up to — `3 devices ·
+    // lowest ~47%` — is over the device list now (the rail's heading): it was a sentence about the
+    // rail's contents sitting in the title bar, and the window title is the one place a name is
+    // expected. A device count that disagrees with the rows below it is also the kind of thing
+    // nobody reads twice.
     let summary = gtk4::Label::builder().label("Embr").build();
     summary.add_css_class("heading");
     let subsummary = gtk4::Label::builder().label("").build();
@@ -227,9 +232,13 @@ fn build(app: &adw::Application) {
     // reads it back and never sets it, which is what keeps a reading arriving mid-click from
     // moving the user off the page they picked.
     let shown_page: Rc<RefCell<FeaturePage>> = Rc::new(RefCell::new(FeaturePage::Battery));
-    // The devices whose feature set has been asked for. A feature set is an inventory rather than
-    // a reading, so it is asked for once per device and again only when the user rescans.
-    let asked: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
+    // The devices whose feature set the window has asked about, and how often. A feature set is an
+    // inventory rather than a reading, so one answer is enough for the session — but one *ask* is
+    // not: a device that was asleep when it was asked answers nothing, and asking exactly once left
+    // the pane saying "asking this device what it can be asked about" for the rest of the session.
+    // `core::pages_ask_again` is the ladder, and it stops.
+    let pages_asked: Rc<RefCell<HashMap<String, (u32, Instant)>>> =
+        Rc::new(RefCell::new(HashMap::new()));
     let refreshing = Rc::new(Cell::new(false));
     let spin_shown = Rc::new(Cell::new(false));
     let last_refresh = Rc::new(Cell::new(Instant::now()));
@@ -255,13 +264,13 @@ fn build(app: &adw::Application) {
     rescan.connect_clicked({
         let commands = commands.clone();
         let refreshing = refreshing.clone();
-        let asked = asked.clone();
+        let pages_asked = pages_asked.clone();
         let attempts = attempts.clone();
         move |_| {
             eprintln!("[app] rescan asked for");
             // The shelf of feature sets is read again too: a device that was asleep when it was
             // first asked is given a second chance by the sweep the user just demanded.
-            asked.borrow_mut().clear();
+            pages_asked.borrow_mut().clear();
             attempts.set(0);
             refreshing.set(true);
             dispatch(&commands, Command::Rescan);
@@ -325,7 +334,7 @@ fn build(app: &adw::Application) {
         let latest = latest.clone();
         let selected = selected.clone();
         let shown_page = shown_page.clone();
-        let asked = asked.clone();
+        let pages_asked = pages_asked.clone();
         let refreshing = refreshing.clone();
         let spin_shown = spin_shown.clone();
         let attempts = attempts.clone();
@@ -363,7 +372,7 @@ fn build(app: &adw::Application) {
                 match action {
                     TrayAction::Rescan => {
                         eprintln!("[app] rescan asked for from the tray");
-                        asked.borrow_mut().clear();
+                        pages_asked.borrow_mut().clear();
                         attempts.set(0);
                         refreshing.set(true);
                         dispatch(&commands, Command::Rescan);
@@ -461,19 +470,24 @@ fn build(app: &adw::Application) {
                     *shown_page.borrow_mut() = visible;
                 }
 
-                // A device whose feature set has not been read yet is asked about once. This is
-                // what fills the rail under the open device, and it is why the rail can only
-                // offer pages the hardware really has.
+                // A device whose feature set has not been read yet is asked about — and asked again
+                // on `core`'s ladder if nothing comes back, because the first ask can land on a
+                // device that is asleep. That ladder is what fills the rail under the open device,
+                // and it is why the rail can only offer pages the hardware really has.
                 if let Some(device) = device
                     && device.pages.is_none()
-                    && asked.borrow_mut().insert(device.key.clone())
+                    && pages_ask_due(&pages_asked, &device.key, Instant::now())
                 {
                     eprintln!("[app] asking {} which features it has", device.name);
                     dispatch(&commands, Command::Pages(device.key.clone()));
                 }
+                // A device that has left takes its ask history with it: attached again, it is a
+                // fresh question rather than a ladder that has already been spent.
+                pages_asked.borrow_mut().retain(|key, _| rail.has(key));
 
-                summary.set_label(&summary_text(snapshot));
-                // The line under it: whatever the configuration could not do, or what the bar
+                // The header's line is the app's own name, written once when the label was built:
+                // what the devices add up to is the rail's heading now (see `rail::Rail::sync`).
+                // The line under it says whatever the configuration could not do, or what the bar
                 // needs to be told to draw this icon.
                 subsummary.set_label(&notice.unwrap_or_else(|| tray_hint(tray_style)));
             }
@@ -560,9 +574,15 @@ fn build(app: &adw::Application) {
 
     // `EMBR_DEBUG_PAGE`: open a page that would otherwise need a click. A page the device does
     // not have is not a page — the request waits for the feature set to arrive rather than
-    // showing something the hardware cannot do.
+    // showing something the hardware cannot do — and a page whose controls this build has not
+    // written yet is not offered by any device, so that is said instead of waiting for ever.
     if let Ok(id) = std::env::var(DEBUG_PAGE_VARIABLE) {
         match FeaturePage::from_id(&id) {
+            Some(page) if !page.offered() => eprintln!(
+                "[app] {DEBUG_PAGE_VARIABLE}=\"{id}\": the {} page exists but this window has no \
+                 controls for it yet, so no device offers it",
+                page.label()
+            ),
             Some(page) => {
                 let content = content.clone();
                 let latest = latest.clone();
@@ -624,6 +644,35 @@ fn build(app: &adw::Application) {
         "[app] window shown {} ms after launch",
         launched.elapsed().as_millis()
     );
+}
+
+/// Whether to ask this device about its feature set now.
+///
+/// The bookkeeping lives here, out of the tick, so that "how often does it ask?" is a function with
+/// a test rather than an `if` with a `HashSet` behind it: a map of device key → how many times it has
+/// been asked and when, plus `core::pages_ask_again`, which is the ladder and the cap. It stops
+/// after `core::PAGES_ATTEMPTS` asks — every one of them wakes a sleeping wireless device — and the
+/// pane then says the device did not answer, with Rescan beside it.
+fn pages_ask_due(
+    asked: &RefCell<HashMap<String, (u32, Instant)>>,
+    key: &str,
+    now: Instant,
+) -> bool {
+    let mut asked = asked.borrow_mut();
+    match asked.get_mut(key) {
+        Some((attempts, last)) => match embr_core::pages_ask_again(*attempts) {
+            Some(wait) if now.duration_since(*last) >= wait => {
+                *attempts += 1;
+                *last = now;
+                true
+            }
+            _ => false,
+        },
+        None => {
+            asked.insert(key.to_string(), (1, now));
+            true
+        }
+    }
 }
 
 /// The line under the header when there is nothing to warn about: what the bar needs to know to
@@ -704,7 +753,10 @@ fn fit(want: i32, have: i32, floor: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::fit;
+    use super::{fit, pages_ask_due};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn a_window_fits_the_screen_it_opens_on() {
@@ -717,5 +769,52 @@ mod tests {
         // Smaller than the floor: a slightly too big window beats one with no room for its controls.
         assert_eq!(fit(1240, 640, 720), 720);
         assert_eq!(fit(860, 400, 520), 520);
+    }
+
+    /// Asking about a feature set is not a one-shot: a device that was asleep during the first ask
+    /// has to be asked again, and a device that never answers must not be asked for ever.
+    #[test]
+    fn a_feature_set_is_asked_for_again_but_not_for_ever() {
+        let asked: RefCell<HashMap<String, (u32, Instant)>> = RefCell::new(HashMap::new());
+        let start = Instant::now();
+
+        assert!(
+            pages_ask_due(&asked, "mouse", start),
+            "the first ask is now"
+        );
+        assert!(
+            !pages_ask_due(&asked, "mouse", start + Duration::from_secs(9)),
+            "and it is not repeated nine seconds later"
+        );
+        assert!(
+            pages_ask_due(&asked, "mouse", start + Duration::from_secs(11)),
+            "ten seconds of silence is worth one more question"
+        );
+        assert!(
+            !pages_ask_due(&asked, "mouse", start + Duration::from_secs(29)),
+            "the gap grows: 20 s this time"
+        );
+        assert!(pages_ask_due(
+            &asked,
+            "mouse",
+            start + Duration::from_secs(31)
+        ));
+        assert!(
+            !pages_ask_due(&asked, "mouse", start + Duration::from_secs(600)),
+            "core::PAGES_ATTEMPTS answers are the cap: past it the pane says the device did not \
+             answer and Rescan is the way back"
+        );
+        assert_eq!(
+            asked.borrow()["mouse"].0,
+            embr_core::PAGES_ATTEMPTS,
+            "three questions, no more"
+        );
+
+        // Another device is its own question, and its own ladder: one mouse that will not answer
+        // must not stop the keyboard from being asked at all.
+        assert!(
+            pages_ask_due(&asked, "keyboard", start + Duration::from_secs(31)),
+            "a second device starts at the top of the ladder"
+        );
     }
 }

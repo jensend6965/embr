@@ -22,7 +22,8 @@ pages are tabs across the pane beside the rail, and only the pages that device a
 ## Features
 
 * **A reading for every device it can reach** — mice, keyboards and headsets alike, worst battery
-  first, with the age of each reading beside it.
+  first, with when each reading was taken beside it: how long ago in words, and the clock time and
+  day it was taken.
 * **Nothing invented.** A device that answered *about itself* but has no reading to give is
   *Connected*; one that said nothing to the question is *Not answering* — a dongle answering for a
   switched-off headset does not count.
@@ -32,8 +33,10 @@ pages are tabs across the pane beside the rail, and only the pages that device a
 * **It notices a device by itself.** A device that stops answering is shown as *Not answering*
   within seconds, and one that comes back is picked up again. **Rescan** reads now, giving a device
   that has been asleep longer to answer before it is written off.
-* **Pages as tabs, and only the pages the device has** — a keyboard with no DPI feature is never
-  offered a DPI tab. The tab you pick stays picked, per device.
+* **Pages as tabs, and only the pages the device has *and* this window can fill** — a keyboard with
+  no DPI feature is never offered a DPI tab, and nothing whose controls are still to be written
+  appears at all: today that is the battery and what the device says it is. The tab you pick stays
+  picked, per device.
 * **A window that uses the width it is given** — the device rail is a column of its own with a
   divider you can drag, and settings rows run the full width with each control at the far right.
 * **A level bar in the colour of its level** — green when full, amber in the middle, red when low —

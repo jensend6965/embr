@@ -12,7 +12,7 @@ pub mod config;
 pub mod policy;
 pub mod view;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use embr_hidpp::discover::{self, DiscoveryReport};
@@ -25,8 +25,8 @@ pub use embr_hidpp::Uevents;
 pub use embr_hidpp::discover::{DeviceKind, Patience};
 pub use policy::{Alert, BatteryPolicy, PolicySettings};
 pub use view::{
-    DevicePages, DeviceView, FeaturePage, Snapshot, TrayIcon, human_age, pages_for, snooze_caption,
-    summary_text, thresholds_text, tray_icons, tray_style_caption,
+    DevicePages, DeviceView, FeaturePage, Features, Snapshot, TrayIcon, features, human_age,
+    pages_for, snooze_caption, summary_text, thresholds_text, tray_icons, tray_style_caption,
 };
 
 /// What the window's close button does.
@@ -129,6 +129,27 @@ pub fn watch_interval(watch_devices: bool, window_open: bool) -> Option<Duration
     (watch_devices && window_open).then(|| Duration::from_secs(WATCH_SECONDS))
 }
 
+/// How many times one device is asked about its own feature set before the window stops asking.
+///
+/// A feature set is an inventory rather than a reading, so one answer is enough for the session —
+/// but a device that was quiet when it was asked answers *nothing*, and that answer used to be
+/// final: the window asked once per device per session, so a mouse that happened to be asleep
+/// during that one ask showed "asking this device what it can be asked about" until the app was
+/// restarted. Three tries over a minute is enough to catch a device that was only napping, and
+/// stops well short of the expensive kind of polling: every one of these questions wakes a
+/// sleeping wireless device.
+pub const PAGES_ATTEMPTS: u32 = 3;
+
+/// Whether to ask a device about its feature set again, and how long to wait first.
+///
+/// `attempts` is how many times it has already been asked. The first ask is due at once (`None` is
+/// only the answer once [`PAGES_ATTEMPTS`] have been spent); after that the gap is
+/// [`retry_interval`]'s — the same ladder a device that stopped answering gets, 10 s then 20 s —
+/// because it is the same situation: something was asked and did not answer.
+pub fn pages_ask_again(attempts: u32) -> Option<Duration> {
+    (attempts < PAGES_ATTEMPTS).then(|| retry_interval(attempts))
+}
+
 /// Holds the configuration, the battery policy and the latest snapshot.
 #[derive(Debug)]
 pub struct Monitor {
@@ -143,6 +164,12 @@ pub struct Monitor {
     /// and kept: reading it costs twenty-odd calls on a keyboard, and repeating that every
     /// minute would be spending the devices' batteries on a fact that cannot have changed.
     pages: HashMap<String, DevicePages>,
+    /// The devices whose feature set was asked for and did not answer.
+    ///
+    /// Kept apart from `pages` because an unanswered read is not a feature set: caching it as one
+    /// would turn a mouse that was asleep into a mouse with no DPI, and a tally that only lived in
+    /// the window could not be drawn as anything but "still asking".
+    unanswered: HashSet<String>,
     /// Problems to show the user once (a bad config file, a receiver that did not answer).
     pub notices: Vec<String>,
 }
@@ -161,14 +188,20 @@ impl Monitor {
             snapshot,
             last_report: None,
             pages: HashMap::new(),
+            unanswered: HashSet::new(),
             notices,
         }
     }
 
     /// Read the configuration from disk and build a monitor around it.
     pub fn from_disk() -> Self {
-        let path = default_path();
-        let (config, problems) = config::load(&path);
+        Self::from_path(&default_path())
+    }
+
+    /// The same, from a configuration file named by the caller — which is how the path is not a
+    /// hidden dependency of the code that has to behave well when the file is broken.
+    pub fn from_path(path: &std::path::Path) -> Self {
+        let (config, problems) = config::load(path);
         let mut monitor = Self::new(config);
         monitor.notices.splice(0..0, problems);
         monitor
@@ -228,6 +261,8 @@ impl Monitor {
             }
         }
         self.pages.retain(|key, _| present.contains(&key.as_str()));
+        self.unanswered
+            .retain(|key| present.contains(&key.as_str()));
         self.snapshot = Snapshot::from_report(&report, &self.config);
         self.apply_pages();
         self.last_report = Some(report);
@@ -238,9 +273,22 @@ impl Monitor {
     fn apply_pages(&mut self) {
         for device in &mut self.snapshot.devices {
             if let Some(pages) = self.pages.get(&device.key) {
-                device.pages = Some(pages.pages.clone());
+                // What the device has, narrowed to what this window can actually do with it: the
+                // inventory stays in `self.pages` (and in the log) for the roadmap's sake, but the
+                // window is only ever offered a page whose controls exist.
+                device.pages = Some(
+                    pages
+                        .pages
+                        .iter()
+                        .copied()
+                        .filter(|page| page.offered())
+                        .collect(),
+                );
                 device.pages_partial = !pages.complete();
             }
+            // The other half of the answer: a device that was asked and said nothing has to be
+            // told apart from one that is still being asked, or the window words them the same.
+            device.pages_unanswered = self.unanswered.contains(&device.key);
         }
     }
 
@@ -260,13 +308,20 @@ impl Monitor {
         // Whoever asked is waiting for it, so give a device that is slow to wake the longer
         // wait: this is one round trip per feature, and half of it timing out is worse than
         // waiting.
-        let capabilities = discover::capabilities_of(&device, Patience::Asked)?;
-        if !capabilities.answered() {
-            // It was reachable and said nothing about its own feature set — which is not the same
-            // as having no features, and must not be cached as if it were. The rail then says the
-            // device did not answer, and the next ask (Rescan) tries again.
-            return None;
-        }
+        let capabilities = match discover::capabilities_of(&device, Patience::Asked) {
+            Some(capabilities) if capabilities.answered() => capabilities,
+            _ => {
+                // It was reachable and said nothing about its own feature set — which is not the
+                // same as having no features, and must not be cached as if it were. It is written
+                // down as *asked and unanswered* so the window says that instead of going on
+                // claiming it is still asking, and so a later ask (the window retries, and Rescan
+                // tries harder) can tell the two apart.
+                self.unanswered.insert(key.to_string());
+                self.apply_pages();
+                return None;
+            }
+        };
+        self.unanswered.remove(key);
         let pages = DevicePages {
             pages: pages_for(
                 &capabilities
@@ -297,6 +352,21 @@ impl Monitor {
     /// Keep quiet about one device for the configured snooze period.
     pub fn snooze(&mut self, key: &str) {
         self.policy.snooze(key, Instant::now());
+    }
+
+    /// Replace the machine-wide warnings with these.
+    ///
+    /// Nothing in the app calls this: it is the debug switch's entry point (`EMBR_DEBUG_WARNINGS`),
+    /// because a warning is otherwise only produced by hardware going wrong in the middle of a
+    /// sweep — a receiver slot that stops answering, a node that becomes unreadable — and the
+    /// surface those land on (the window's Problems group) cannot be looked at any other way. It is
+    /// also how the row bookkeeping in `page.rs` is checked: one line declaring a problem is enough
+    /// to drive it, where a real one costs a device.
+    pub fn debug_warnings(&mut self, warnings: Vec<String>) {
+        self.snapshot.warnings = warnings.clone();
+        if let Some(report) = self.last_report.as_mut() {
+            report.warnings = warnings;
+        }
     }
 
     /// Turn battery notifications on or off and remember the choice.
@@ -492,9 +562,54 @@ mod tests {
 
     #[test]
     fn a_bad_config_file_is_reported_as_a_notice() {
-        let monitor = Monitor::from_disk();
-        // The notice list always explains the default state; the point is that it exists.
-        assert!(!monitor.notices.is_empty());
+        // Through a named path, never `Monitor::from_disk`: that reads the real
+        // `~/.config/embr/config.toml`, so this test used to be a claim about whoever ran it — and
+        // it failed the moment Jensen switched notifications on, because the notice it asserted was
+        // the one saying they are off.
+        let path = std::env::temp_dir().join("embr-test-bad-config.toml");
+        std::fs::write(&path, "this is not = toml [[[").unwrap();
+        let monitor = Monitor::from_path(&path);
+        assert_eq!(
+            monitor.notices.len(),
+            2,
+            "the file's problem, and the default state behind it: {:?}",
+            monitor.notices
+        );
+        assert!(
+            monitor.notices[0].contains("not valid configuration"),
+            "the problem is first, because it is what explains the defaults that follow: {:?}",
+            monitor.notices
+        );
+        assert_eq!(
+            monitor.config().notifications.enabled,
+            Config::default().notifications.enabled,
+            "a file that will not load leaves the defaults in place"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_configuration_with_notifications_off_is_announced_where_the_window_shows_it() {
+        let monitor = Monitor::new(Config::default());
+        assert!(
+            !monitor.config().notifications.enabled,
+            "the default is that nothing is announced"
+        );
+        assert!(
+            monitor
+                .notices
+                .iter()
+                .any(|note| note.contains("never announced")),
+            "and the window says so: {:?}",
+            monitor.notices
+        );
+
+        let mut imported = Config::default();
+        imported.notifications.enabled = true;
+        assert!(
+            Monitor::new(imported).notices.is_empty(),
+            "with notifications on there is nothing left to explain"
+        );
     }
 
     #[test]
@@ -559,6 +674,32 @@ mod tests {
             scheduled_interval(1, true),
             Duration::from_secs(MIN_REFRESH_SECONDS),
             "and never faster than a sweep can be"
+        );
+    }
+
+    #[test]
+    fn asking_about_a_feature_set_is_retried_and_then_left_alone() {
+        assert_eq!(
+            pages_ask_again(0),
+            Some(Duration::from_secs(10)),
+            "a device that was asleep when it was asked is asked again — this is the one that \
+             left a mouse saying `asking…` for a whole session before"
+        );
+        assert_eq!(pages_ask_again(1), Some(Duration::from_secs(10)));
+        assert_eq!(
+            pages_ask_again(2),
+            Some(Duration::from_secs(20)),
+            "the gap grows: a device that will not answer must not be woken every ten seconds"
+        );
+        assert_eq!(
+            pages_ask_again(PAGES_ATTEMPTS),
+            None,
+            "and then it stops: every one of these questions wakes a sleeping device, so past \
+             the cap the window says it did not answer and Rescan is the way back"
+        );
+        assert!(
+            pages_ask_again(PAGES_ATTEMPTS - 1).is_some(),
+            "the last attempt is still made"
         );
     }
 

@@ -99,11 +99,32 @@ impl FeaturePage {
             Self::Device => None,
         }
     }
+
+    /// Whether this window can actually *do* this page — the question `pages_for` deliberately does
+    /// not ask.
+    ///
+    /// `pages_for` is an inventory: what the hardware advertised, kept because that is what the
+    /// roadmap is built from and what the log should say. A page only belongs in the window once
+    /// its controls exist, though: a tab whose contents are a sentence about what is not there yet
+    /// is a promise, and Jensen asked for none of those on 2026-10-17 — "don't show any feature
+    /// that we are not ready yet, which means for now we only able to control battery monitoring".
+    /// So today the window offers exactly two: the battery it reads, and what the device says it is.
+    /// When a page's controls land, this is the one line that has to change.
+    pub fn offered(self) -> bool {
+        match self {
+            Self::Battery | Self::Device => true,
+            Self::Dpi | Self::Lighting | Self::Buttons | Self::Profiles | Self::Host => false,
+        }
+    }
 }
 
 /// The pages one device has, from the features it advertises.
 ///
 /// Battery and Device are always there; the rest only when the device really implements them.
+/// This is the **inventory**, and it is deliberately wider than the window: what the hardware
+/// advertised is what the roadmap is built from and what the log prints. What the window may
+/// actually offer as a tab is `FeaturePage::offered`'s subset of it — see the comment there for
+/// why a page the hardware has but this build cannot fill is not shown at all.
 pub fn pages_for(features: &[Feature]) -> Vec<FeaturePage> {
     let has = |feature: Feature| features.contains(&feature);
     let mut pages = vec![FeaturePage::Battery];
@@ -183,11 +204,21 @@ pub struct DeviceView {
     pub alert_below_effective: u8,
     /// Which pages this device has, once its feature set has been read. `None` until it has
     /// been — a window that guessed would be offering features the hardware may not have.
+    ///
+    /// The inventory (`pages_for`) narrowed to what this build can fill: a page that exists but
+    /// whose controls are not written yet is not offered at all (`FeaturePage::offered`).
     pub pages: Option<Vec<FeaturePage>>,
     /// True when the feature set came back with slots that did not answer, so the pages above are
     /// a subset rather than the whole inventory. A device that went to sleep halfway through its
     /// own feature list must not be shown as one that has no lighting.
     pub pages_partial: bool,
+    /// True when the feature set was asked for and the device said nothing at all.
+    ///
+    /// A third state beside *not asked yet* and *answered*, and the one that used to be invisible:
+    /// to anything that only asks whether `pages` is `Some` — or whether the *battery* read
+    /// failed — a read that came back empty looks exactly like one still in flight, so the window
+    /// went on saying "asking this device what it can be asked about" for the rest of the session.
+    pub pages_unanswered: bool,
     /// Why there is no reading.
     pub error: Option<String>,
     /// When the reading was taken.
@@ -233,6 +264,7 @@ impl DeviceView {
             // guessed here, because a guess would become a page the hardware cannot serve.
             pages: None,
             pages_partial: false,
+            pages_unanswered: false,
             error: device.error.clone(),
             captured: reading.map(|b| b.captured),
         }
@@ -241,6 +273,35 @@ impl DeviceView {
     /// Whether this device needs attention: low, or reporting a faulty battery.
     pub fn needs_attention(&self) -> bool {
         self.faulty || self.percent.is_some_and(|p| p <= 20)
+    }
+}
+
+/// How much is known about a device's feature set.
+///
+/// Three states that a window looking at `pages` alone cannot tell apart, and they are three
+/// different things to read: a device still being asked, one that was asked and said nothing, and
+/// one that answered — with a list that may be a subset. The window prints different sentences for
+/// them, so which one it is has to be decided here rather than guessed from an `Option`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Features {
+    /// Nothing has been read yet: the window has asked, or is about to ask.
+    Asking,
+    /// It was asked and did not answer — or it could not be read at all this sweep.
+    Unanswered,
+    /// It named its features. `pages` is the list, and `pages_partial` says whether it is short.
+    Known,
+}
+
+/// What is known about this device's feature set.
+///
+/// A device that could not be read at all counts as *unanswered* rather than as the one still being
+/// asked: the honest sentence there is that it did not answer, and the button beside it is the same
+/// one either way.
+pub fn features(device: &DeviceView) -> Features {
+    match device.pages {
+        Some(_) => Features::Known,
+        None if device.pages_unanswered || device.error.is_some() => Features::Unanswered,
+        None => Features::Asking,
     }
 }
 
@@ -462,15 +523,21 @@ pub fn tray_style_caption(chosen: crate::TrayStyle) -> String {
     format!("{} — {}.", chosen.label(), chosen.caption())
 }
 
-/// `12s ago`, `4 min ago`, `2 h ago` — for the "updated" field of the details panel.
+/// `just now`, `4 min ago`, `2 h ago` — for the "updated" field of the details panel.
+///
+/// **Coarse on purpose, and it carries no seconds at all.** The window draws this four times a
+/// second, and a line that counts seconds up (`3s ago`, `4s ago`, `5s ago`) is a line that changes
+/// on every tick: it redraws a dozen times a minute, it reads as a window that is busy rather than
+/// as a reading, and it makes two readings a second apart look like a moving number. The exact time
+/// is *beside* it, in the user's own clock (`page.rs` stamps it), which is what lets the words be
+/// this patient — nothing is lost by rounding, because the minute and the day are printed anyway.
 pub fn human_age(captured: SystemTime, now: SystemTime) -> String {
     let seconds = now
         .duration_since(captured)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     match seconds {
-        0..=1 => "just now".to_string(),
-        2..=59 => format!("{seconds}s ago"),
+        0..=59 => "just now".to_string(),
         60..=3599 => format!("{} min ago", seconds / 60),
         3600..=86399 => format!("{} h ago", seconds / 3600),
         _ => format!("{} d ago", seconds / 86400),
@@ -816,10 +883,12 @@ mod tests {
     }
 
     #[test]
-    fn ages_read_like_a_human_wrote_them() {
+    fn ages_are_coarse_and_never_count_seconds() {
         let now = SystemTime::now();
         assert_eq!(human_age(now, now), "just now");
-        assert_eq!(human_age(now - Duration::from_secs(30), now), "30s ago");
+        assert_eq!(human_age(now - Duration::from_secs(30), now), "just now");
+        assert_eq!(human_age(now - Duration::from_secs(59), now), "just now");
+        assert_eq!(human_age(now - Duration::from_secs(60), now), "1 min ago");
         assert_eq!(human_age(now - Duration::from_secs(600), now), "10 min ago");
         assert_eq!(human_age(now - Duration::from_secs(7200), now), "2 h ago");
         assert_eq!(
@@ -828,6 +897,43 @@ mod tests {
         );
         // a clock that went backwards must not panic or print nonsense
         assert_eq!(human_age(now + Duration::from_secs(600), now), "just now");
+
+        // The point of the function: no age is expressed in seconds, so no reading redraws its own
+        // line once a second. Two ages a second apart are the same words.
+        for age in [0, 1, 5, 30, 59, 61, 120, 3599, 3600, 86399, 86400] {
+            let text = human_age(now - Duration::from_secs(age), now);
+            assert!(!text.contains("s ago"), "{age}s reads as {text}");
+        }
+        assert_eq!(
+            human_age(now - Duration::from_secs(5), now),
+            human_age(now - Duration::from_secs(55), now)
+        );
+    }
+
+    #[test]
+    fn three_things_look_like_no_pages_and_only_one_of_them_is_asking() {
+        let mouse = device("Mouse", Some((47, PercentSource::Estimated)));
+        let mut view = DeviceView::from_device(&mouse, &config());
+        assert_eq!(
+            features(&view),
+            Features::Asking,
+            "nothing has been read yet"
+        );
+
+        // The device was asked and said nothing: the wording is what tells the user apart from a
+        // device that is still being asked.
+        view.pages_unanswered = true;
+        assert_eq!(features(&view), Features::Unanswered);
+
+        // An answer, even an empty list, is not the same thing as silence — and a device that
+        // could not be read at all is *unanswered* rather than still being asked.
+        view.pages = Some(Vec::new());
+        assert_eq!(features(&view), Features::Known);
+        assert!(view.pages_unanswered, "the flag stays whatever it was told");
+
+        let mut gone = DeviceView::from_device(&mouse, &config());
+        gone.error = Some("no reply".to_string());
+        assert_eq!(features(&gone), Features::Unanswered);
     }
 
     #[test]
@@ -999,6 +1105,42 @@ mod tests {
             partial.pages,
             vec![FeaturePage::Battery, FeaturePage::Device]
         );
+    }
+
+    #[test]
+    fn the_window_only_offers_pages_whose_controls_exist() {
+        // The inventory is everything the hardware advertised — kept whole, because it is what the
+        // roadmap is built from and what the log prints.
+        let mouse = pages_for(&[
+            Feature::AdjustableDpi,
+            Feature::RgbEffects,
+            Feature::OnboardProfiles,
+            Feature::SpecialKeys,
+        ]);
+        assert!(mouse.contains(&FeaturePage::Dpi), "{mouse:?}");
+
+        // What the window may offer as a tab is the part of it this build can fill in. A tab whose
+        // contents are "not in this window yet" is a promise, and Jensen asked for none of those:
+        // "don't show any feature that we are not ready yet, which means for now we only able to
+        // control battery monitoring".
+        let offered: Vec<FeaturePage> = mouse
+            .iter()
+            .copied()
+            .filter(|page| page.offered())
+            .collect();
+        assert_eq!(offered, vec![FeaturePage::Battery, FeaturePage::Device]);
+
+        // Spelled out, so that turning one on is a deliberate edit here and not a side effect of
+        // some other change: these five are roadmap work, and their pages exist as evidence only.
+        for page in [
+            FeaturePage::Dpi,
+            FeaturePage::Lighting,
+            FeaturePage::Buttons,
+            FeaturePage::Profiles,
+            FeaturePage::Host,
+        ] {
+            assert!(!page.offered(), "{} is not built yet", page.label());
+        }
     }
 
     #[test]
