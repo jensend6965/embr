@@ -63,6 +63,13 @@ cargo run --release -p embr       # or: ./target/release/embr
   were on, per device. Measured on the running window: a click on Lighting was still Lighting twenty
   seconds and four watch passes later, and switching to another device and back came back to
   Lighting rather than to Battery.
+* **A glyph per device in the rail, drawn rather than looked up.** Each row carries a mouse, a
+  keyboard, a headset (or a trackball, touchpad, keypad, remote) in front of its name. The shapes are
+  cairo primitives in `widgets::device_glyph`, not an icon name: an icon name is a bet on the
+  desktop's icon theme, and on this machine that bet is lost — GTK resolves the theme as `"gnome"`,
+  has only a handful of symbolic names, and draws the rest as its missing-image box. Drawn shapes
+  take the row's own colour, so they dim with a device that is not answering and follow light, dark
+  and the accent with no second set of assets.
 * **Two controls write**, both on the Battery page and both through `core`: the device's own
   low-battery level (a spin box, with *Shared* to put it back on the shared thresholds) and the
   snooze. A number the user is moving is protected from a snapshot taken before their edit — the page
