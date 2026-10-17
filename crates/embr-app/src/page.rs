@@ -154,7 +154,7 @@ impl Content {
         });
 
         let status = adw::StatusPage::builder()
-            .icon_name("dialog-warning-symbolic")
+            .icon_name("dialog-information-symbolic")
             .title("No device to show")
             .build();
         // Nothing is open yet, so the strip holds the status page and nothing else.
@@ -699,7 +699,7 @@ struct DeviceParts {
 impl DeviceParts {
     fn update(&self, device: &DeviceView) {
         widgets::set_subtitle(&self.name, &device.name);
-        widgets::set_subtitle(&self.kind, &device.kind);
+        widgets::set_subtitle(&self.kind, &device.kind_label);
         widgets::set_subtitle(&self.connection, &device.connection);
     }
 }
@@ -709,7 +709,7 @@ fn device_page(device: &DeviceView) -> (adw::PreferencesPage, Rc<DeviceParts>) {
     let group = adw::PreferencesGroup::builder().title("Device").build();
 
     let name = widgets::row_with("Name", &device.name);
-    let kind = widgets::row_with("Kind", &device.kind);
+    let kind = widgets::row_with("Kind", &device.kind_label);
     let connection = widgets::row_with("Connected through", &device.connection);
     group.add(&name);
     group.add(&kind);

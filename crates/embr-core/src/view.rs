@@ -5,7 +5,7 @@
 
 use std::time::SystemTime;
 
-use embr_hidpp::discover::{Device, DiscoveryReport};
+use embr_hidpp::discover::{Device, DeviceKind, DiscoveryReport};
 use embr_hidpp::report::Feature;
 
 use crate::Level;
@@ -154,7 +154,12 @@ pub struct DeviceView {
     /// Stable identity, used for snoozing and for keeping the selection across refreshes.
     pub key: String,
     pub name: String,
-    pub kind: String,
+    /// What kind of peripheral it is. The window draws a glyph from this rather than from a string,
+    /// and an icon *name* would be a bet on the desktop's icon theme (see `widgets::device_glyph`).
+    pub kind: DeviceKind,
+    /// That kind in words — `Mouse`, `Headset`, `Keyboard` — so the rail and the Device page cannot
+    /// word it differently.
+    pub kind_label: String,
     pub connection: String,
     /// 0–100, when it is known.
     pub percent: Option<u8>,
@@ -199,7 +204,8 @@ impl DeviceView {
         Self {
             key: device.key.clone(),
             name: device.name.clone(),
-            kind: device.kind.label().to_string(),
+            kind: device.kind,
+            kind_label: device.kind.label().to_string(),
             connection: device.connection.label(),
             percent: percent.map(|p| p.value),
             percent_text: match percent {

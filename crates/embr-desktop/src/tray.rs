@@ -707,13 +707,14 @@ fn scale_for(count: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use embr_core::DeviceView;
+    use embr_core::{DeviceKind, DeviceView};
 
     fn view(key: &str, percent: Option<u8>) -> DeviceView {
         DeviceView {
             key: key.to_string(),
             name: format!("G703 {key}"),
-            kind: "Mouse".to_string(),
+            kind: DeviceKind::Mouse,
+            kind_label: "Mouse".to_string(),
             connection: "USB".to_string(),
             percent,
             percent_text: percent

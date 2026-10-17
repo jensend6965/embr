@@ -29,7 +29,7 @@ use crate::widgets;
 /// `main` puts this column in a `GtkPaned` as the start child, with `resize_start_child(false)`, so
 /// the width is this or whatever the user dragged it to — and never a side effect of what a device
 /// is called. A wrapping title cannot widen it: the pane's position is the width.
-pub const WIDTH: i32 = 340;
+pub const WIDTH: i32 = 450;
 
 pub struct Rail {
     /// The container to put in the window.
@@ -222,6 +222,26 @@ impl Rail {
         }
     }
 
+    /// What each row is actually laid out as — for `EMBR_DEBUG_HEADLESS`, which checks the rail
+    /// without putting a window on screen: one glyph, one line of name, and a height that every row
+    /// shares.
+    pub fn probe(&self) -> Vec<String> {
+        self.rows
+            .borrow()
+            .iter()
+            .map(|entry| {
+                let row: gtk4::Widget = entry.row.clone().upcast();
+                let (_, natural, _, _) = row.measure(gtk4::Orientation::Vertical, WIDTH);
+                format!(
+                    "{}: title_lines={} glyphs={} height={natural}",
+                    entry.key,
+                    entry.row.title_lines(),
+                    count_type(&row, "GtkDrawingArea"),
+                )
+            })
+            .collect()
+    }
+
     fn add(&self, device: &DeviceView) {
         let row = widgets::row_with(&device.name, &summary(device, SystemTime::now()));
         // **A `GtkListBoxRow` is not activatable unless it is told so.** The property defaults to
@@ -231,10 +251,19 @@ impl Rail {
         // reported `activatable=false` and a synthetic click at its centre produced nothing at all.
         row.set_activatable(true);
         row.set_tooltip_text(Some(&device.name));
+        row.add_prefix(&widgets::device_glyph(device.kind));
+        // One line for the name, one for the reading, so every row is exactly as tall as every other:
+        // the battery bars line up down the column and the list stops re-flowing when a device joins
+        // or leaves. A long vendor name is cut with an ellipsis and the whole of it stays available —
+        // in this tooltip, and as the heading of the pane beside the rail.
+        row.set_title_lines(1);
+        row.set_subtitle_lines(1);
 
         let bar = gtk4::LevelBar::new();
         bar.set_mode(gtk4::LevelBarMode::Continuous);
-        bar.set_size_request(72, -1);
+        // 56, not 72: the bar only has to read as a proportion, and every pixel it gives back is a
+        // pixel the one-line name keeps before its ellipsis.
+        bar.set_size_request(56, -1);
         bar.set_valign(Align::Center);
         bar.set_value(f64::from(device.percent.unwrap_or(0)) / 100.0);
         bar.set_visible(device.percent.is_some());
@@ -265,7 +294,7 @@ fn summary(device: &DeviceView, now: SystemTime) -> String {
         Some(captured) => human_age(captured, now),
         None => "never".to_string(),
     };
-    format!("{} · {} · {}", device.status, device.kind, age)
+    format!("{} · {} · {}", device.status, device.kind_label, age)
 }
 
 fn taken_label(snapshot: &Snapshot, now: SystemTime) -> String {
@@ -273,4 +302,15 @@ fn taken_label(snapshot: &Snapshot, now: SystemTime) -> String {
         Some(taken) => human_age(taken, now),
         None => "never".to_string(),
     }
+}
+
+/// Count the descendants of `node` whose GObject type is `name`.
+fn count_type(node: &gtk4::Widget, name: &str) -> usize {
+    let mut total = usize::from(node.type_().name() == name);
+    let mut child = node.first_child();
+    while let Some(widget) = child {
+        total += count_type(&widget, name);
+        child = widget.next_sibling();
+    }
+    total
 }

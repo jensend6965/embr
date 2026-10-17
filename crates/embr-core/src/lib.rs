@@ -22,7 +22,7 @@ pub use config::{
     TrayLook, TrayStyle, TrayTextColor, WHITE, default_path, level_band, level_color,
 };
 pub use embr_hidpp::Uevents;
-pub use embr_hidpp::discover::Patience;
+pub use embr_hidpp::discover::{DeviceKind, Patience};
 pub use policy::{Alert, BatteryPolicy, PolicySettings};
 pub use view::{
     DevicePages, DeviceView, FeaturePage, Snapshot, TrayIcon, human_age, pages_for, snooze_caption,

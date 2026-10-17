@@ -63,9 +63,23 @@ const DEBUG_ABOUT_VARIABLE: &str = "EMBR_DEBUG_ABOUT";
 const DEBUG_SETTINGS_VARIABLE: &str = "EMBR_DEBUG_SETTINGS";
 
 fn main() -> glib::ExitCode {
-    let app = adw::Application::builder()
-        .application_id("io.github.jensend6965.Embr")
-        .build();
+    // `EMBR_DEBUG_GLYPHS`: draw every device glyph to one image and stop. Nothing else runs — no
+    // window, no compositor, no icon theme — because a glyph is geometry and can be judged on its
+    // own. Called before the application is built: registering and then exiting breaks the bus.
+    if std::env::var_os("EMBR_DEBUG_GLYPHS").is_some() {
+        crate::widgets::write_glyph_sheet();
+        return glib::ExitCode::SUCCESS;
+    }
+
+    // The probe is a second instance, so it must not contend for the running app's name: the
+    // session bus hands `io.github.jensend6965.Embr` to the window that is already open, and a
+    // second process under that id simply exits ("Failed to register: Timeout was reached").
+    let app_id = if std::env::var_os("EMBR_DEBUG_HEADLESS").is_some() {
+        "io.github.jensend6965.EmbrProbe"
+    } else {
+        "io.github.jensend6965.Embr"
+    };
+    let app = adw::Application::builder().application_id(app_id).build();
     app.connect_activate(build);
     app.run()
 }
@@ -127,8 +141,11 @@ fn build(app: &adw::Application) {
         .icon_name("emblem-system-symbolic")
         .tooltip_text("Settings")
         .build();
+    // `help-about-symbolic` is one of the names this desktop's icon theme does not have: GTK drew
+    // its missing-image box in the corner of the header. `dialog-information-symbolic` is measured
+    // to resolve here, and it is the same glyph Adwaita's About button uses.
     let about_button = gtk4::Button::builder()
-        .icon_name("help-about-symbolic")
+        .icon_name("dialog-information-symbolic")
         .tooltip_text("About Embr")
         .build();
     let summary = gtk4::Label::builder().label("Embr").build();
@@ -160,6 +177,18 @@ fn build(app: &adw::Application) {
         .shrink_start_child(false)
         .wide_handle(true)
         .build();
+
+    if std::env::var_os("EMBR_DEBUG_HEADLESS").is_some() {
+        let icon = about_button.icon_name().unwrap_or_default();
+        let theme =
+            gtk4::gdk::Display::default().map(|display| gtk4::IconTheme::for_display(&display));
+        eprintln!(
+            "[probe] rail position {} (want {}), about icon {icon:?} has_icon={:?}",
+            body.position(),
+            rail::WIDTH,
+            theme.map(|theme| theme.has_icon(&icon))
+        );
+    }
 
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
@@ -413,6 +442,13 @@ fn build(app: &adw::Application) {
                 *selected.borrow_mut() = chosen.clone();
 
                 rail.sync(snapshot, chosen.as_deref(), now);
+                if std::env::var_os("EMBR_DEBUG_HEADLESS").is_some() && !snapshot.devices.is_empty()
+                {
+                    for line in rail.probe() {
+                        eprintln!("[probe] {line}");
+                    }
+                    app.quit();
+                }
                 content.sync(device, state, now);
                 // The tabs belong to the user, so this reads them rather than steering them:
                 // whatever the strip is showing is what the window now considers open, and a
@@ -577,7 +613,13 @@ fn build(app: &adw::Application) {
         });
     }
 
-    window.present();
+    // A headless run builds and fills the window without ever showing it, so a verification
+    // cannot steal focus from whatever else is on screen. `hold()` is what keeps the application
+    // alive in that state: `app.run` returns as soon as there is no window to wait for.
+    let headless = std::env::var_os("EMBR_DEBUG_HEADLESS").is_some();
+    if !headless {
+        window.present();
+    }
     eprintln!(
         "[app] window shown {} ms after launch",
         launched.elapsed().as_millis()
