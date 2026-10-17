@@ -14,10 +14,10 @@ Embr shows what every attached Logitech mouse, keyboard and headset is doing —
 charge state and how it is connected — in a small window, a tray icon and optional desktop
 notifications.
 
-![Embr's window: a rail of devices with their battery levels, and the selected device's pages](docs/screenshot.png)
+![Embr's window: a rail of devices with their battery levels, and the open device's pages as tabs](docs/screenshot.png)
 
-*It uses the width it is given: the rail is the devices, and the page beside it is the subject.
-A device that has stopped answering says so, rather than showing a stale number.*
+*The rail is the devices, at a width of its own; the open device's pages are tabs across the pane
+beside it. A device that has stopped answering says so, rather than showing a stale number.*
 
 ## How this was written
 
@@ -41,10 +41,13 @@ Practically: read it before you run it, and report what breaks. HID++ has no rea
   switched-off headset does not count; a percentage worked out from voltage is marked `~`, and a
   percentage a device reports itself always wins.
 * **Worst battery first**, with the age of each reading beside it.
-* **A window that uses the width it is given.** Dragged wider, the device list stops at a
-  comfortable width and the detail card takes the rest; the settings page runs its rows the full
-  width with each control at the far right, the way Solaar looks when it is maximised. Narrow
-  enough and the two panes start to compete — below about 700 px they cannot both fit.
+* **A window that uses the width it is given.** The device list is a column of its own — 340 px,
+  and a divider you can drag — so a long device name wraps instead of shoving the pages aside, and
+  the pane beside it takes everything left. The open device's pages are tabs across the top of that
+  pane, and they are the pages the device itself advertises: a keyboard with no DPI feature is never
+  offered a DPI tab. The settings page runs its rows the full width with each control at the far
+  right, the way Solaar looks when it is maximised. Everything keeps redrawing while readings
+  arrive, but never *moves* you: the tab you picked stays picked, per device.
 * **A cadence that matches what you are doing.** While the window is open the devices are read
   at the interval you choose; with the window closed it backs off to no more than once every two
   minutes, and reads everything the moment the window comes back. **Rescan** reads now, and gives
